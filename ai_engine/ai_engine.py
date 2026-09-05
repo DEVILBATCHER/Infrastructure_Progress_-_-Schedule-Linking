@@ -1,23 +1,14 @@
 import nltk
 from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 vectorizer = TfidfVectorizer()
-from nltk.tokenize import word_tokenize
-from nltk.corpus import stopwords
-from nltk.stem import WordNetLemmatizer
-lemmatizer = WordNetLemmatizer()
+
 documents = [
     "12 inch spool erection completed at Unit 3",
     "Install 12-inch carbon steel pipeline"
 ]
 tfidf_matrix = vectorizer.fit_transform(documents)
+cosine_sim = cosine_similarity(tfidf_matrix[0], tfidf_matrix[1])
 print(vectorizer.get_feature_names_out())
 print(tfidf_matrix.toarray())
-def preprocess_tfidf(text):
-    tokens = word_tokenize(text.lower())
-    stop_words = set(stopwords.words('english'))
-    filtered = [word for word in tokens if word not in stop_words]
-    lemmatized = [lemmatizer.lemmatize(word) for word in filtered]
-    return lemmatized
-text = "This is a sample text for tokenization."
-lemmatized = preprocess_tfidf(text)
-print(lemmatized)
+print("Cosine Similarity:", cosine_sim[0][0])
