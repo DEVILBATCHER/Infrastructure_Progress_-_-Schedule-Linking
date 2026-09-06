@@ -42,10 +42,8 @@ def normalize_batch(text_list):
 
 model = SentenceTransformer('all-MiniLM-L6-v2')
 
-
 def embed_texts(text_list):
     return model.encode(text_list)
-
 
 # ============================================================
 # STAGE 4: SEMANTIC SEARCH
