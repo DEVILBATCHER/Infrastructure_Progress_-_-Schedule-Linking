@@ -3,10 +3,6 @@ from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 
 
-# ============================================================
-# STAGE 2: NORMALIZATION  (from Lesson 1 + Lesson 4)
-# ============================================================
-
 def clean_text(text):
     """Lowercase, strip whitespace, collapse extra spaces, remove punctuation
     (but keep hyphens, since they show up in things like '12-inch')."""
@@ -36,11 +32,6 @@ def normalize_batch(text_list):
     """Apply full_clean() across a whole list of texts."""
     return [full_clean(t) for t in text_list]
 
-
-# ============================================================
-# STAGE 3: EMBEDDINGS  (from Lesson 10)
-# ============================================================
-
 # Load once - do NOT reload this inside a loop, it's slow.
 model = SentenceTransformer('all-MiniLM-L6-v2')
 
@@ -48,11 +39,6 @@ model = SentenceTransformer('all-MiniLM-L6-v2')
 def embed_texts(text_list):
     """Turn a list of sentences into a list of embedding vectors."""
     return model.encode(text_list)
-
-
-# ============================================================
-# STAGE 4: CANDIDATE RETRIEVAL / SEMANTIC SEARCH  (from Lesson 11)
-# ============================================================
 
 def semantic_search(report_line, schedule_texts, schedule_embeddings, top_k=5):
     """
@@ -66,12 +52,6 @@ def semantic_search(report_line, schedule_texts, schedule_embeddings, top_k=5):
     results = list(zip(schedule_texts, scores))
     results.sort(key=lambda x: x[1], reverse=True)
     return results[:top_k]
-
-
-# ============================================================
-# STAGE 5: RERANKING  (from Lesson 13)
-# ============================================================
-
 def extract_unit(text):
     """Pull out something like 'Unit 3' from text, if present."""
     match = re.search(r'unit\s*(\d+)', text.lower())
@@ -141,3 +121,15 @@ if __name__ == "__main__":
     print("\nAfter reranking:")
     for text, score in reranked_candidates:
         print(f"  {score:.3f}  -  {text}")
+
+def get_confidence_level(score):
+    """
+    Maps a raw similarity/reranked score to a human-readable confidence band.
+    Thresholds are illustrative - you'll tune these using real examples (Lesson 15).
+    """
+    if score >= 0.5:
+        return "High"
+    elif score >= 0.3:
+        return "Medium"
+    else:
+        return "Low"
