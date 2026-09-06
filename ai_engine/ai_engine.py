@@ -4,91 +4,72 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 
 # ============================================================
-# STAGE 2: NORMALIZATION  (Lesson 1 + Lesson 4)
+# STAGE 2: NORMALIZATION
 # ============================================================
 
 def clean_text(text):
-    """Lowercase, strip whitespace, collapse extra spaces, remove punctuation
-    (but keep hyphens, since they show up in things like '12-inch')."""
     if text is None:
         return ""
     text = text.lower().strip()
-    text = re.sub(r'\s+', ' ', text)              # collapse multiple spaces
-    text = re.sub(r'[^\w\s\-]', '', text)          # strip punctuation
+    text = re.sub(r'\s+', ' ', text)
+    text = re.sub(r'[^\w\s\-]', '', text)
     return text
 
 
 def normalize_units(text):
-    """Standardize unit phrasing so '12-inch', '12 inch', and 12" all match."""
     text = re.sub(r'(\d+)\s*-?\s*inch', r'\1 inch', text)
     text = re.sub(r'(\d+)"', r'\1 inch', text)
     return text
 
 
 def full_clean(text):
-    """Run the complete normalization pipeline on one piece of text."""
     text = clean_text(text)
     text = normalize_units(text)
     return text
 
 
 def normalize_batch(text_list):
-    """Apply full_clean() across a whole list of texts."""
     return [full_clean(t) for t in text_list]
 
 
 # ============================================================
-# STAGE 3: EMBEDDINGS  (Lesson 10)
+# STAGE 3: EMBEDDINGS
 # ============================================================
 
-# Load once - do NOT reload this inside a loop, it's slow.
 model = SentenceTransformer('all-MiniLM-L6-v2')
 
 
 def embed_texts(text_list):
-    """Turn a list of sentences into a list of embedding vectors."""
     return model.encode(text_list)
 
 
 # ============================================================
-# STAGE 4: CANDIDATE RETRIEVAL / SEMANTIC SEARCH  (Lesson 11)
+# STAGE 4: SEMANTIC SEARCH
 # ============================================================
 
 def semantic_search(report_line, schedule_texts, schedule_embeddings, top_k=5):
-    """
-    Compare one report line against all schedule activities.
-    Returns the top_k matches as a list of (activity_text, semantic_score) tuples,
-    ranked highest score first.
-    """
     report_embedding = model.encode(report_line)
     scores = cosine_similarity([report_embedding], schedule_embeddings)[0]
-
     results = list(zip(schedule_texts, scores))
     results.sort(key=lambda x: x[1], reverse=True)
     return results[:top_k]
 
 
 # ============================================================
-# STAGE 5: RERANKING  (Lesson 13)
+# STAGE 5: RERANKING
 # ============================================================
 
 def extract_unit(text):
-    """Pull out something like 'Unit 3' from text, if present."""
     match = re.search(r'unit\s*(\d+)', text.lower())
     return match.group(1) if match else None
 
 
 def extract_measurement(text):
-    """Pull out something like '12 inch' from text, if present."""
     match = re.search(r'(\d+)\s*inch', text.lower())
     return match.group(1) if match else None
 
 
 def rerank(report_line, candidates_with_scores):
-    """
-    Re-score the top candidates from semantic_search() using explicit signals
-    (matching unit number, matching measurement) that embeddings can underweight.
-    """
     report_unit = extract_unit(report_line)
     report_measurement = extract_measurement(report_line)
 
@@ -99,149 +80,311 @@ def rerank(report_line, candidates_with_scores):
             boost += 0.1
         if report_measurement and extract_measurement(activity_text) == report_measurement:
             boost += 0.1
-
-        final_score = semantic_score + boost
-        reranked.append((activity_text, final_score))
+        reranked.append((activity_text, float(semantic_score) + boost))
 
     reranked.sort(key=lambda x: x[1], reverse=True)
     return reranked
 
 
 # ============================================================
-# STAGE 6: CONFIDENCE SCORING  (Lesson 14)
+# STAGE 6: CONFIDENCE SCORING
 # ============================================================
 
-def get_confidence_level(score):
-    """
-    Maps a raw similarity/reranked score to a human-readable confidence band.
-    NOTE: these thresholds are illustrative starting points only.
-    Use evaluate() / top_k_accuracy() below on real labeled data to tune them properly.
-    """
-    if score >= 0.5:
-        return "High"
-    elif score >= 0.3:
-        return "Medium"
-    else:
-        return "Low"
-
-
 def get_confidence_with_gap(reranked_candidates):
-    """
-    Uses both the top score AND the gap to the second-best score to produce a
-    more honest confidence level. A narrow gap means the system is not truly
-    sure, even if the top score alone looks decent (e.g. near-duplicate activities).
-    """
+    if len(reranked_candidates) == 0:
+        return "None"
     if len(reranked_candidates) < 2:
         top_score = reranked_candidates[0][1]
-        return get_confidence_level(top_score)
+    else:
+        top_score = reranked_candidates[0][1]
+        second_score = reranked_candidates[1][1]
+        gap = top_score - second_score
+        if top_score >= 0.5 and gap >= 0.1:
+            return "High"
+        elif top_score >= 0.3:
+            return "Medium"
+        else:
+            return "Low"
 
-    top_score = reranked_candidates[0][1]
-    second_score = reranked_candidates[1][1]
-    gap = top_score - second_score
-
-    if top_score >= 0.5 and gap >= 0.1:
+    if top_score >= 0.5:
         return "High"
     elif top_score >= 0.3:
         return "Medium"
-    else:
-        return "Low"
+    return "Low"
 
 
 # ============================================================
-# STAGE 7: EVALUATION  (Lesson 15)
+# THE INTEGRATION FUNCTION - what Person 2 will actually call
 # ============================================================
 
-def evaluate(test_set, schedule_texts, schedule_ids, schedule_embeddings):
+def _match_single(report_text, schedule_ids, schedule_texts_raw, schedule_clean,
+                   schedule_embeddings, top_k, low_confidence_cutoff):
     """
-    test_set: list of (report_line, true_activity_id) tuples - your labeled ground truth.
-    Reports top-1 accuracy: how often the #1 predicted activity was actually correct.
+    Internal helper: does the actual matching work for ONE report, given a
+    schedule that has ALREADY been cleaned and embedded. Both match_report()
+    and match_reports_batch() call this, so the embedding step never happens
+    more than once per schedule.
     """
-    correct = 0
-    total = len(test_set)
+    # --- Edge case: empty or missing report text ---
+    if not report_text or not report_text.strip():
+        return {
+            "status": "error",
+            "input_report": report_text,
+            "top_matches": [],
+            "confidence": "None",
+            "message": "Report text is empty or missing."
+        }
 
-    for report_line, true_activity_id in test_set:
-        report_clean = full_clean(report_line)
-        candidates = semantic_search(report_clean, schedule_texts, schedule_embeddings, top_k=5)
+    try:
+        report_clean = full_clean(report_text)
+
+        # Stage 4: retrieve candidates
+        candidates = semantic_search(report_clean, schedule_clean, schedule_embeddings, top_k=max(top_k, 2))
+
+        # Stage 5: rerank
         reranked = rerank(report_clean, candidates)
 
-        top_prediction_text = reranked[0][0]
-        predicted_id = [aid for aid, text in zip(schedule_ids, schedule_texts) if text == top_prediction_text][0]
+        # --- Edge case: nothing scored above the "is this even worth showing" cutoff ---
+        if not reranked or reranked[0][1] < low_confidence_cutoff:
+            return {
+                "status": "no_match",
+                "input_report": report_text,
+                "top_matches": [],
+                "confidence": "None",
+                "message": "No sufficiently similar schedule activity was found."
+            }
 
-        is_correct = (predicted_id == true_activity_id)
-        correct += is_correct
-        status = "correct" if is_correct else "WRONG"
-        print(f"Report: {report_line[:50]:<50} | Predicted: {predicted_id} | True: {true_activity_id} | {status}")
+        # Stage 6: confidence
+        confidence = get_confidence_with_gap(reranked)
 
-    accuracy = correct / total
-    print(f"\nTop-1 Accuracy: {accuracy:.1%} ({correct}/{total})")
-    return accuracy
+        # Map cleaned activity text back to its original activity_id
+        clean_to_id = dict(zip(schedule_clean, schedule_ids))
+        clean_to_original_desc = dict(zip(schedule_clean, schedule_texts_raw))
+
+        top_matches = []
+        for activity_text_clean, score in reranked[:top_k]:
+            top_matches.append({
+                "activity_id": clean_to_id.get(activity_text_clean, "UNKNOWN"),
+                "description": clean_to_original_desc.get(activity_text_clean, activity_text_clean),
+                "score": round(float(score), 4)
+            })
+
+        return {
+            "status": "matched",
+            "input_report": report_text,
+            "top_matches": top_matches,
+            "confidence": confidence
+        }
+
+    except Exception as e:
+        # Never let the backend get an unhandled crash - always return valid JSON
+        return {
+            "status": "error",
+            "input_report": report_text,
+            "top_matches": [],
+            "confidence": "None",
+            "message": f"Matching engine failed: {str(e)}"
+        }
 
 
-def top_k_accuracy(test_set, schedule_texts, schedule_ids, schedule_embeddings, k=3):
+def _prepare_schedule(schedule_data):
     """
-    Reports whether the true activity showed up ANYWHERE in the top k candidates -
-    a more honest metric for a pipeline that ends in human review of a shortlist,
-    rather than a fully-automatic single answer.
+    Shared setup step: pulls activity_id/description out of schedule_data,
+    normalizes the text, and embeds it ONCE. Skips (rather than crashes on)
+    any row that's missing a required field - a malformed schedule row
+    shouldn't take down the whole request.
+    Returns (schedule_ids, schedule_texts_raw, schedule_clean, schedule_embeddings)
+    or None if nothing usable was found.
     """
-    correct = 0
-    for report_line, true_activity_id in test_set:
-        report_clean = full_clean(report_line)
-        candidates = semantic_search(report_clean, schedule_texts, schedule_embeddings, top_k=k)
-        reranked = rerank(report_clean, candidates)
+    schedule_ids = []
+    schedule_texts_raw = []
 
-        top_k_texts = [text for text, score in reranked[:k]]
-        top_k_ids = [aid for aid, text in zip(schedule_ids, schedule_texts) if text in top_k_texts]
+    for i, item in enumerate(schedule_data):
+        activity_id = item.get("activity_id")
+        description = item.get("description")
+        if not activity_id or not description or not str(description).strip():
+            # Skip bad rows instead of crashing the whole batch
+            continue
+        schedule_ids.append(activity_id)
+        schedule_texts_raw.append(description)
 
-        if true_activity_id in top_k_ids:
-            correct += 1
+    if not schedule_texts_raw:
+        return None
 
-    accuracy = correct / len(test_set)
-    print(f"Top-{k} Accuracy: {accuracy:.1%}")
-    return accuracy
+    schedule_clean = normalize_batch(schedule_texts_raw)
+    schedule_embeddings = embed_texts(schedule_clean)
+    return schedule_ids, schedule_texts_raw, schedule_clean, schedule_embeddings
+
+
+def match_report(report_text, schedule_data, top_k=3, low_confidence_cutoff=0.15):
+    """
+    The single entry point for matching ONE report against the schedule.
+
+    Parameters
+    ----------
+    report_text : str
+        Raw text from a daily report (e.g. "12 inch spool erection completed at Unit 3").
+    schedule_data : list of dict
+        Each dict must have "activity_id" and "description" keys, e.g.:
+        [{"activity_id": "P101", "description": "Install 12-inch carbon steel pipeline"}, ...]
+    top_k : int
+        How many candidate matches to return.
+    low_confidence_cutoff : float
+        If the top score is below this, treat it as "no match found" rather than
+        returning a misleading low-quality match.
+
+    Returns
+    -------
+    dict - JSON-serializable, ready to hand back through an API response.
+    {
+        "status": "matched" | "no_match" | "error",
+        "input_report": "...",
+        "top_matches": [
+            {"activity_id": "P101", "description": "...", "score": 0.42},
+            ...
+        ],
+        "confidence": "High" | "Medium" | "Low" | "None",
+        "message": "..."   # present on error / no_match
+    }
+
+    NOTE: if you have MULTIPLE reports to match against the same schedule,
+    use match_reports_batch() instead - it embeds the schedule only once
+    for all reports, instead of once per report.
+    """
+    if not report_text or not report_text.strip():
+        return {
+            "status": "error",
+            "input_report": report_text,
+            "top_matches": [],
+            "confidence": "None",
+            "message": "Report text is empty or missing."
+        }
+
+    if not schedule_data:
+        return {
+            "status": "error",
+            "input_report": report_text,
+            "top_matches": [],
+            "confidence": "None",
+            "message": "No schedule activities were provided to match against."
+        }
+
+    prepared = _prepare_schedule(schedule_data)
+    if prepared is None:
+        return {
+            "status": "error",
+            "input_report": report_text,
+            "top_matches": [],
+            "confidence": "None",
+            "message": "No usable schedule activities found (all rows missing activity_id/description)."
+        }
+
+    schedule_ids, schedule_texts_raw, schedule_clean, schedule_embeddings = prepared
+    return _match_single(report_text, schedule_ids, schedule_texts_raw, schedule_clean,
+                          schedule_embeddings, top_k, low_confidence_cutoff)
+
+
+def match_reports_batch(report_list, schedule_data, top_k=3, low_confidence_cutoff=0.15):
+    """
+    Match MANY reports against the same schedule in one call.
+    This is the function to use for an upload-a-file-of-reports workflow
+    (e.g. Person 2's POST /upload-report handling a whole Excel/CSV of reports),
+    since it embeds the schedule only ONCE and reuses it for every report,
+    instead of re-embedding it per report like calling match_report() in a loop would.
+
+    Parameters
+    ----------
+    report_list : list of str
+        Multiple raw report text lines.
+    schedule_data : list of dict
+        Same format as match_report().
+    top_k, low_confidence_cutoff : same as match_report().
+
+    Returns
+    -------
+    dict:
+    {
+        "status": "completed" | "error",
+        "results": [ <same dict shape match_report() returns>, ... ]   # one per report, same order as input
+        "message": "..."   # present on error
+    }
+    """
+    if not report_list:
+        return {
+            "status": "error",
+            "results": [],
+            "message": "No reports were provided to match."
+        }
+
+    if not schedule_data:
+        return {
+            "status": "error",
+            "results": [],
+            "message": "No schedule activities were provided to match against."
+        }
+
+    prepared = _prepare_schedule(schedule_data)
+    if prepared is None:
+        return {
+            "status": "error",
+            "results": [],
+            "message": "No usable schedule activities found (all rows missing activity_id/description)."
+        }
+
+    schedule_ids, schedule_texts_raw, schedule_clean, schedule_embeddings = prepared
+
+    results = []
+    for report_text in report_list:
+        result = _match_single(report_text, schedule_ids, schedule_texts_raw, schedule_clean,
+                                schedule_embeddings, top_k, low_confidence_cutoff)
+        results.append(result)
+
+    return {
+        "status": "completed",
+        "results": results
+    }
 
 
 # ============================================================
-# PUTTING IT TOGETHER - a quick end-to-end test
+# QUICK LOCAL TEST - run this file directly to sanity-check
 # ============================================================
 
 if __name__ == "__main__":
-    # Raw schedule data (would normally come from Person 2's database)
-    raw_schedule = [
-        "Install 12-inch carbon steel pipeline, Unit 3",
-        "Install 12-inch carbon steel pipeline, Unit 5",
-        "Replace 6-inch gate valve at Unit 2",
-        "Erect structural steel column at Bay 4",
-    ]
-    schedule_ids = ["P101", "P104", "P102", "P103"]
-
-    # Stage 2: normalize
-    schedule_clean = normalize_batch(raw_schedule)
-
-    # Stage 3: embed once
-    schedule_embeddings = embed_texts(schedule_clean)
-
-    # --- Single report walkthrough (Stages 4-6) ---
-    raw_report = "  12 INCH spool erection completed at Unit 3.  "
-    report_clean = full_clean(raw_report)
-
-    candidates = semantic_search(report_clean, schedule_clean, schedule_embeddings, top_k=4)
-    reranked_candidates = rerank(report_clean, candidates)
-
-    print("Ranked matches with confidence:")
-    for text, score in reranked_candidates:
-        print(f"  {score:.3f}  [{get_confidence_level(score)}]  -  {text}")
-
-    overall_confidence = get_confidence_with_gap(reranked_candidates)
-    print(f"\nOverall confidence for this report (using top-2 gap): {overall_confidence}")
-
-    # --- Evaluation on a small labeled test set (Stage 7) ---
-    print("\n--- Running evaluation ---")
-    test_set = [
-        ("12 inch spool erection completed at Unit 3", "P101"),
-        ("Gate valve replaced - Unit 2", "P102"),
-        ("Structural steel column erected, Bay 4", "P103"),
-        ("Install 12-inch carbon steel pipeline, Unit 5 work done", "P104"),
+    schedule_data = [
+        {"activity_id": "P101", "description": "Install 12-inch carbon steel pipeline, Unit 3"},
+        {"activity_id": "P104", "description": "Install 12-inch carbon steel pipeline, Unit 5"},
+        {"activity_id": "P102", "description": "Replace 6-inch gate valve at Unit 2"},
+        {"activity_id": "P103", "description": "Erect structural steel column at Bay 4"},
     ]
 
-    evaluate(test_set, schedule_clean, schedule_ids, schedule_embeddings)
-    top_k_accuracy(test_set, schedule_clean, schedule_ids, schedule_embeddings, k=3)
+    # Normal case
+    result = match_report("12 inch spool erection completed at Unit 3.", schedule_data)
+    print("Normal case:", result)
+
+    # Empty report
+    print("\nEmpty report:", match_report("", schedule_data))
+
+    # Empty schedule
+    print("\nEmpty schedule:", match_report("some report text", []))
+
+    # Nonsense / unrelated report -> likely no_match or low confidence
+    print("\nUnrelated report:", match_report("Weather was sunny today, no work performed.", schedule_data))
+
+    # --- Batch test: several reports matched against the same schedule at once ---
+    print("\n--- Batch test ---")
+    reports = [
+        "12 inch spool erection completed at Unit 3.",
+        "Gate valve replaced - Unit 2",
+        "Weather was sunny today, no work performed.",
+        "",  # deliberately empty, to confirm it's handled gracefully inside a batch
+    ]
+    batch_result = match_reports_batch(reports, schedule_data)
+    print("Batch status:", batch_result["status"])
+    for i, r in enumerate(batch_result["results"]):
+        print(f"  [{i}] status={r['status']} confidence={r['confidence']} "
+              f"top_match={r['top_matches'][0]['activity_id'] if r['top_matches'] else None}")
+
+    # --- Malformed schedule row test: one bad row shouldn't break everything ---
+    print("\n--- Malformed schedule row test ---")
+    messy_schedule = schedule_data + [{"activity_id": "P999"}]  # missing "description"
+    print(match_report("12 inch spool erection completed at Unit 3.", messy_schedule))
