@@ -1,6 +1,6 @@
 import re
+import chromadb
 from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
 
 
 # ============================================================
@@ -24,9 +24,8 @@ def normalize_units(text):
 
 def full_clean(text):
     # normalize_units must run BEFORE clean_text: clean_text strips the "
-    # character (it's not in \w, \s, or -), so if it ran first the
-    # (\d+)" -> "\1 inch" rule in normalize_units would never match anything
-    # (e.g. 12" would be reduced straight to "12", silently losing the unit).
+    # character, so if it ran first, the (\d+)" -> "\1 inch" rule would
+    # never match anything (e.g. 12" would collapse straight to "12").
     text = normalize_units(text)
     text = clean_text(text)
     return text
@@ -37,30 +36,87 @@ def normalize_batch(text_list):
 
 
 # ============================================================
-# STAGE 3: EMBEDDINGS
+# STAGE 3: EMBEDDINGS + STORAGE (now ChromaDB instead of an in-memory array)
 # ============================================================
 
 model = SentenceTransformer('all-MiniLM-L6-v2')
 
+# PersistentClient saves the index to disk in ./chroma_data, so the schedule
+# stays indexed between separate runs of the program, not just within one.
+_chroma_client = chromadb.PersistentClient(path="./chroma_data")
+_collection = _chroma_client.get_or_create_collection(
+    name="schedule_activities",
+    metadata={"hnsw:space": "cosine"}  # match the cosine similarity semantics used everywhere else
+)
+
+
 def embed_texts(text_list):
     return model.encode(text_list)
 
+
+def _prepare_schedule(schedule_data):
+    """
+    Filters out malformed rows, normalizes the survivors, embeds them, and
+    upserts them into the Chroma collection keyed by activity_id.
+
+    upsert (not add) means calling this again with the same schedule just
+    refreshes the existing entries instead of erroring - safe to call on
+    every match_report()/match_reports_batch() call, the same way the old
+    in-memory _prepare_schedule() re-ran on every call.
+
+    Returns True if at least one usable row was indexed, False otherwise.
+    """
+    schedule_ids = []
+    schedule_texts_raw = []
+
+    for item in schedule_data:
+        activity_id = item.get("activity_id")
+        description = item.get("description")
+        if not activity_id or not description or not str(description).strip():
+            # Skip bad rows instead of crashing the whole batch
+            continue
+        schedule_ids.append(activity_id)
+        schedule_texts_raw.append(description)
+
+    if not schedule_texts_raw:
+        return False
+
+    schedule_clean = normalize_batch(schedule_texts_raw)
+    schedule_embeddings = embed_texts(schedule_clean).tolist()  # Chroma wants plain lists, not numpy arrays
+
+    _collection.upsert(
+        ids=schedule_ids,
+        embeddings=schedule_embeddings,
+        documents=schedule_texts_raw,                          # original text, for display
+        metadatas=[{"clean_text": c} for c in schedule_clean]  # cleaned text, needed for the rerank boost
+    )
+    return True
+
+
 # ============================================================
-# STAGE 4: SEMANTIC SEARCH
+# STAGE 4: SEMANTIC SEARCH (now a Chroma query instead of sklearn cosine_similarity)
 # ============================================================
 
-def semantic_search(report_line, schedule_embeddings, top_k=5):
+def semantic_search(report_line, top_k=5):
     """
-    Returns (schedule_index, score) pairs, sorted best-first.
-    Working in indices (rather than zipping back onto the schedule text)
-    keeps candidates tied to a specific schedule row even when two rows
-    happen to have identical or near-identical descriptions.
+    Returns (activity_id, similarity, original_description, clean_text)
+    tuples, sorted best-first. Because Chroma keys everything by
+    activity_id (not by text), two schedule rows with identical
+    descriptions can never collide the way a text-keyed lookup could.
     """
-    report_embedding = model.encode(report_line)
-    scores = cosine_similarity([report_embedding], schedule_embeddings)[0]
-    results = list(enumerate(scores))
-    results.sort(key=lambda x: x[1], reverse=True)
-    return results[:top_k]
+    report_embedding = model.encode(report_line).tolist()
+    results = _collection.query(query_embeddings=[report_embedding], n_results=top_k)
+
+    ids = results["ids"][0]
+    distances = results["distances"][0]
+    documents = results["documents"][0]
+    metadatas = results["metadatas"][0]
+
+    candidates = []
+    for activity_id, distance, doc, meta in zip(ids, distances, documents, metadatas):
+        similarity = 1 - distance  # cosine space: distance = 1 - similarity
+        candidates.append((activity_id, similarity, doc, meta["clean_text"]))
+    return candidates
 
 
 # ============================================================
@@ -77,32 +133,29 @@ def extract_measurement(text):
     return match.group(1) if match else None
 
 
-def rerank(report_line, candidates_with_scores, schedule_clean):
+def rerank(report_line, candidates):
     """
-    candidates_with_scores: list of (schedule_index, semantic_score), as
-    returned by semantic_search().
-    schedule_clean: the full cleaned schedule text list, used to look up
-    each candidate's text by index for the unit/measurement boost.
+    candidates: list of (activity_id, similarity, description, clean_text),
+    as returned by semantic_search().
     """
     report_unit = extract_unit(report_line)
     report_measurement = extract_measurement(report_line)
 
     reranked = []
-    for idx, semantic_score in candidates_with_scores:
-        activity_text = schedule_clean[idx]
+    for activity_id, score, description, clean_text_val in candidates:
         boost = 0
-        if report_unit and extract_unit(activity_text) == report_unit:
+        if report_unit and extract_unit(clean_text_val) == report_unit:
             boost += 0.1
-        if report_measurement and extract_measurement(activity_text) == report_measurement:
+        if report_measurement and extract_measurement(clean_text_val) == report_measurement:
             boost += 0.1
-        reranked.append((idx, float(semantic_score) + boost))
+        reranked.append((activity_id, float(score) + boost, description))
 
     reranked.sort(key=lambda x: x[1], reverse=True)
     return reranked
 
 
 # ============================================================
-# STAGE 6: CONFIDENCE SCORING
+# STAGE 6: CONFIDENCE SCORING (unchanged - only ever looks at the score)
 # ============================================================
 
 def get_confidence_with_gap(reranked_candidates):
@@ -130,17 +183,15 @@ def get_confidence_with_gap(reranked_candidates):
 
 # ============================================================
 # THE INTEGRATION FUNCTION - what Person 2 will actually call
+# (signatures and return shapes are UNCHANGED from the sklearn version -
+#  schemas.py is still accurate, no changes needed on Person 2's side)
 # ============================================================
 
-def _match_single(report_text, schedule_ids, schedule_texts_raw, schedule_clean,
-                   schedule_embeddings, top_k, low_confidence_cutoff):
+def _match_single(report_text, top_k, low_confidence_cutoff):
     """
-    Internal helper: does the actual matching work for ONE report, given a
-    schedule that has ALREADY been cleaned and embedded. Both match_report()
-    and match_reports_batch() call this, so the embedding step never happens
-    more than once per schedule.
+    Internal helper: does the actual matching work for ONE report, against
+    whatever is currently indexed in the Chroma collection.
     """
-    # --- Edge case: empty or missing report text ---
     if not report_text or not report_text.strip():
         return {
             "status": "error",
@@ -153,13 +204,9 @@ def _match_single(report_text, schedule_ids, schedule_texts_raw, schedule_clean,
     try:
         report_clean = full_clean(report_text)
 
-        # Stage 4: retrieve candidates (index, score)
-        candidates = semantic_search(report_clean, schedule_embeddings, top_k=max(top_k, 2))
+        candidates = semantic_search(report_clean, top_k=max(top_k, 2))
+        reranked = rerank(report_clean, candidates)
 
-        # Stage 5: rerank (still index, score - schedule_clean only used for lookup)
-        reranked = rerank(report_clean, candidates, schedule_clean)
-
-        # --- Edge case: nothing scored above the "is this even worth showing" cutoff ---
         if not reranked or reranked[0][1] < low_confidence_cutoff:
             return {
                 "status": "no_match",
@@ -169,17 +216,13 @@ def _match_single(report_text, schedule_ids, schedule_texts_raw, schedule_clean,
                 "message": "No sufficiently similar schedule activity was found."
             }
 
-        # Stage 6: confidence
         confidence = get_confidence_with_gap(reranked)
 
-        # Look up id/description by index - safe even when multiple schedule
-        # rows share identical (or identically-cleaned) description text,
-        # since each candidate still points at the exact row it came from.
         top_matches = []
-        for idx, score in reranked[:top_k]:
+        for activity_id, score, description in reranked[:top_k]:
             top_matches.append({
-                "activity_id": schedule_ids[idx],
-                "description": schedule_texts_raw[idx],
+                "activity_id": activity_id,
+                "description": description,
                 "score": round(float(score), 4)
             })
 
@@ -201,35 +244,6 @@ def _match_single(report_text, schedule_ids, schedule_texts_raw, schedule_clean,
         }
 
 
-def _prepare_schedule(schedule_data):
-    """
-    Shared setup step: pulls activity_id/description out of schedule_data,
-    normalizes the text, and embeds it ONCE. Skips (rather than crashes on)
-    any row that's missing a required field - a malformed schedule row
-    shouldn't take down the whole request.
-    Returns (schedule_ids, schedule_texts_raw, schedule_clean, schedule_embeddings)
-    or None if nothing usable was found.
-    """
-    schedule_ids = []
-    schedule_texts_raw = []
-
-    for i, item in enumerate(schedule_data):
-        activity_id = item.get("activity_id")
-        description = item.get("description")
-        if not activity_id or not description or not str(description).strip():
-            # Skip bad rows instead of crashing the whole batch
-            continue
-        schedule_ids.append(activity_id)
-        schedule_texts_raw.append(description)
-
-    if not schedule_texts_raw:
-        return None
-
-    schedule_clean = normalize_batch(schedule_texts_raw)
-    schedule_embeddings = embed_texts(schedule_clean)
-    return schedule_ids, schedule_texts_raw, schedule_clean, schedule_embeddings
-
-
 def match_report(report_text, schedule_data, top_k=3, low_confidence_cutoff=0.15):
     """
     The single entry point for matching ONE report against the schedule.
@@ -241,6 +255,8 @@ def match_report(report_text, schedule_data, top_k=3, low_confidence_cutoff=0.15
     schedule_data : list of dict
         Each dict must have "activity_id" and "description" keys, e.g.:
         [{"activity_id": "P101", "description": "Install 12-inch carbon steel pipeline"}, ...]
+        Indexed into ChromaDB (upsert) every call, so an updated schedule is
+        always reflected immediately.
     top_k : int
         How many candidate matches to return.
     low_confidence_cutoff : float
@@ -261,9 +277,9 @@ def match_report(report_text, schedule_data, top_k=3, low_confidence_cutoff=0.15
         "message": "..."   # present on error / no_match
     }
 
-    NOTE: if you have MULTIPLE reports to match against the same schedule,
-    use match_reports_batch() instead - it embeds the schedule only once
-    for all reports, instead of once per report.
+    NOTE: if you have MULTIPLE reports to match against the same schedule in
+    one request, use match_reports_batch() instead - it indexes the schedule
+    only once for all reports, instead of once per report.
     """
     if not report_text or not report_text.strip():
         return {
@@ -283,8 +299,7 @@ def match_report(report_text, schedule_data, top_k=3, low_confidence_cutoff=0.15
             "message": "No schedule activities were provided to match against."
         }
 
-    prepared = _prepare_schedule(schedule_data)
-    if prepared is None:
+    if not _prepare_schedule(schedule_data):
         return {
             "status": "error",
             "input_report": report_text,
@@ -293,9 +308,7 @@ def match_report(report_text, schedule_data, top_k=3, low_confidence_cutoff=0.15
             "message": "No usable schedule activities found (all rows missing activity_id/description)."
         }
 
-    schedule_ids, schedule_texts_raw, schedule_clean, schedule_embeddings = prepared
-    return _match_single(report_text, schedule_ids, schedule_texts_raw, schedule_clean,
-                          schedule_embeddings, top_k, low_confidence_cutoff)
+    return _match_single(report_text, top_k, low_confidence_cutoff)
 
 
 def match_reports_batch(report_list, schedule_data, top_k=3, low_confidence_cutoff=0.15):
@@ -303,8 +316,8 @@ def match_reports_batch(report_list, schedule_data, top_k=3, low_confidence_cuto
     Match MANY reports against the same schedule in one call.
     This is the function to use for an upload-a-file-of-reports workflow
     (e.g. Person 2's POST /upload-report handling a whole Excel/CSV of reports),
-    since it embeds the schedule only ONCE and reuses it for every report,
-    instead of re-embedding it per report like calling match_report() in a loop would.
+    since it indexes the schedule only ONCE and reuses it for every report,
+    instead of re-indexing it per report like calling match_report() in a loop would.
 
     Parameters
     ----------
@@ -337,21 +350,14 @@ def match_reports_batch(report_list, schedule_data, top_k=3, low_confidence_cuto
             "message": "No schedule activities were provided to match against."
         }
 
-    prepared = _prepare_schedule(schedule_data)
-    if prepared is None:
+    if not _prepare_schedule(schedule_data):
         return {
             "status": "error",
             "results": [],
             "message": "No usable schedule activities found (all rows missing activity_id/description)."
         }
 
-    schedule_ids, schedule_texts_raw, schedule_clean, schedule_embeddings = prepared
-
-    results = []
-    for report_text in report_list:
-        result = _match_single(report_text, schedule_ids, schedule_texts_raw, schedule_clean,
-                                schedule_embeddings, top_k, low_confidence_cutoff)
-        results.append(result)
+    results = [_match_single(report_text, top_k, low_confidence_cutoff) for report_text in report_list]
 
     return {
         "status": "completed",
@@ -387,8 +393,8 @@ if __name__ == "__main__":
     # Nonsense / unrelated report -> likely no_match or low confidence
     print("\nUnrelated report:", match_report("Weather was sunny today, no work performed.", schedule_data))
 
-    # Duplicate-description regression check: two rows with identical text
-    # should still resolve to the correct activity_id via index, not collide.
+    # Duplicate-description regression check: two rows, identical text,
+    # different activity_id - Chroma keys by id, so no collision.
     dup_schedule = schedule_data + [{"activity_id": "P105", "description": "Replace 6-inch gate valve at Unit 2"}]
     print("\nDuplicate description schedule:", match_report("Gate valve replaced - Unit 2", dup_schedule))
 
