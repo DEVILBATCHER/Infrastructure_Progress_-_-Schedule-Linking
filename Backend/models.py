@@ -35,7 +35,7 @@ class ExtractedActivity(Base):
     __tablename__ = "extracted_activities"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    report_id = Column(UUID(as_uuid=True), ForeignKey("site_reports.id", ondelete="CASCADE"))
+    report_id = Column(UUID(as_uuid=True), ForeignKey("site_reports.id"), nullable=False)
     raw_text = Column(Text, nullable=False)
     extracted_date = Column(Date, nullable=True)
     embedding = Column(Vector(384), nullable=True)
@@ -46,9 +46,9 @@ class ActivityMatch(Base):
     __tablename__ = "activity_matches"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    extracted_activity_id = Column(UUID(as_uuid=True), ForeignKey("extracted_activities.id", ondelete="CASCADE"))
-    schedule_activity_id = Column(UUID(as_uuid=True), ForeignKey("schedule_activities.id", ondelete="CASCADE"))
+    extracted_activity_id = Column(UUID(as_uuid=True), ForeignKey("extracted_activities.id"), nullable=False)
+    schedule_activity_id = Column(UUID(as_uuid=True), ForeignKey("schedule_activities.id"), nullable=False)
     confidence_score = Column(Numeric(4, 3), nullable=False)
-    status = Column(String(30), default="PENDING") # AUTO_APPROVED, PENDING, MANUALLY_APPROVED, REJECTED
+    status = Column(String(50), default="PENDING") # AUTO_APPROVED, PENDING, MANUALLY_APPROVED, REJECTED
     reviewed_at = Column(DateTime(timezone=True), nullable=True)
 

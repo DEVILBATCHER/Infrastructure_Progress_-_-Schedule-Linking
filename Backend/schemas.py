@@ -30,4 +30,17 @@ class SiteReportResponse(BaseModel):
 
     class Config:
         from_attributes = True        
+# --- Append to schemas.py ---
 
+class ActivityMatchResponse(BaseModel):
+    id: UUID
+    extracted_text: str
+    matched_schedule_name: str
+    confidence_score: float
+    status: str
+
+    class Config:
+        from_attributes = True
+
+class MatchReviewAction(BaseModel):
+    action: str # "APPROVE" or "REJECT"
