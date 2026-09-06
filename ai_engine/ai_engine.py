@@ -23,8 +23,12 @@ def normalize_units(text):
 
 
 def full_clean(text):
-    text = clean_text(text)
+    # normalize_units must run BEFORE clean_text: clean_text strips the "
+    # character (it's not in \w, \s, or -), so if it ran first the
+    # (\d+)" -> "\1 inch" rule in normalize_units would never match anything
+    # (e.g. 12" would be reduced straight to "12", silently losing the unit).
     text = normalize_units(text)
+    text = clean_text(text)
     return text
 
 
@@ -47,10 +51,16 @@ def embed_texts(text_list):
 # STAGE 4: SEMANTIC SEARCH
 # ============================================================
 
-def semantic_search(report_line, schedule_texts, schedule_embeddings, top_k=5):
+def semantic_search(report_line, schedule_embeddings, top_k=5):
+    """
+    Returns (schedule_index, score) pairs, sorted best-first.
+    Working in indices (rather than zipping back onto the schedule text)
+    keeps candidates tied to a specific schedule row even when two rows
+    happen to have identical or near-identical descriptions.
+    """
     report_embedding = model.encode(report_line)
     scores = cosine_similarity([report_embedding], schedule_embeddings)[0]
-    results = list(zip(schedule_texts, scores))
+    results = list(enumerate(scores))
     results.sort(key=lambda x: x[1], reverse=True)
     return results[:top_k]
 
@@ -69,18 +79,25 @@ def extract_measurement(text):
     return match.group(1) if match else None
 
 
-def rerank(report_line, candidates_with_scores):
+def rerank(report_line, candidates_with_scores, schedule_clean):
+    """
+    candidates_with_scores: list of (schedule_index, semantic_score), as
+    returned by semantic_search().
+    schedule_clean: the full cleaned schedule text list, used to look up
+    each candidate's text by index for the unit/measurement boost.
+    """
     report_unit = extract_unit(report_line)
     report_measurement = extract_measurement(report_line)
 
     reranked = []
-    for activity_text, semantic_score in candidates_with_scores:
+    for idx, semantic_score in candidates_with_scores:
+        activity_text = schedule_clean[idx]
         boost = 0
         if report_unit and extract_unit(activity_text) == report_unit:
             boost += 0.1
         if report_measurement and extract_measurement(activity_text) == report_measurement:
             boost += 0.1
-        reranked.append((activity_text, float(semantic_score) + boost))
+        reranked.append((idx, float(semantic_score) + boost))
 
     reranked.sort(key=lambda x: x[1], reverse=True)
     return reranked
@@ -138,11 +155,11 @@ def _match_single(report_text, schedule_ids, schedule_texts_raw, schedule_clean,
     try:
         report_clean = full_clean(report_text)
 
-        # Stage 4: retrieve candidates
-        candidates = semantic_search(report_clean, schedule_clean, schedule_embeddings, top_k=max(top_k, 2))
+        # Stage 4: retrieve candidates (index, score)
+        candidates = semantic_search(report_clean, schedule_embeddings, top_k=max(top_k, 2))
 
-        # Stage 5: rerank
-        reranked = rerank(report_clean, candidates)
+        # Stage 5: rerank (still index, score - schedule_clean only used for lookup)
+        reranked = rerank(report_clean, candidates, schedule_clean)
 
         # --- Edge case: nothing scored above the "is this even worth showing" cutoff ---
         if not reranked or reranked[0][1] < low_confidence_cutoff:
@@ -157,15 +174,14 @@ def _match_single(report_text, schedule_ids, schedule_texts_raw, schedule_clean,
         # Stage 6: confidence
         confidence = get_confidence_with_gap(reranked)
 
-        # Map cleaned activity text back to its original activity_id
-        clean_to_id = dict(zip(schedule_clean, schedule_ids))
-        clean_to_original_desc = dict(zip(schedule_clean, schedule_texts_raw))
-
+        # Look up id/description by index - safe even when multiple schedule
+        # rows share identical (or identically-cleaned) description text,
+        # since each candidate still points at the exact row it came from.
         top_matches = []
-        for activity_text_clean, score in reranked[:top_k]:
+        for idx, score in reranked[:top_k]:
             top_matches.append({
-                "activity_id": clean_to_id.get(activity_text_clean, "UNKNOWN"),
-                "description": clean_to_original_desc.get(activity_text_clean, activity_text_clean),
+                "activity_id": schedule_ids[idx],
+                "description": schedule_texts_raw[idx],
                 "score": round(float(score), 4)
             })
 
@@ -361,6 +377,9 @@ if __name__ == "__main__":
     result = match_report("12 inch spool erection completed at Unit 3.", schedule_data)
     print("Normal case:", result)
 
+    # Quote-style measurement (regression check for the normalization-order fix)
+    print("\nQuote-style measurement:", match_report('12" spool erection completed at Unit 3.', schedule_data))
+
     # Empty report
     print("\nEmpty report:", match_report("", schedule_data))
 
@@ -369,6 +388,11 @@ if __name__ == "__main__":
 
     # Nonsense / unrelated report -> likely no_match or low confidence
     print("\nUnrelated report:", match_report("Weather was sunny today, no work performed.", schedule_data))
+
+    # Duplicate-description regression check: two rows with identical text
+    # should still resolve to the correct activity_id via index, not collide.
+    dup_schedule = schedule_data + [{"activity_id": "P105", "description": "Replace 6-inch gate valve at Unit 2"}]
+    print("\nDuplicate description schedule:", match_report("Gate valve replaced - Unit 2", dup_schedule))
 
     # --- Batch test: several reports matched against the same schedule at once ---
     print("\n--- Batch test ---")
