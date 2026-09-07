@@ -1,0 +1,76 @@
+DAILY PROGRESS REPORT
+
+Project: OIL India Ltd — Pipeline & Utility Infrastructure Works
+Location: Site Zone B, Duliajan
+Report Date: 04-Sep-2026
+Shift: Day (06:00 – 18:00)
+Reported By: J. Sharma, Site Supervisor
+Weather: Clear, no rain delay
+
+---------------------------------------------
+MANPOWER DEPLOYED
+---------------------------------------------
+Civil crew        : 12
+Piping crew       : 9
+Electrical crew   : 6
+Instrumentation   : 3
+HSE / Safety      : 2
+Total on site     : 32
+
+---------------------------------------------
+SAFETY
+---------------------------------------------
+06:30 – 06:50   Toolbox talk conducted on confined space entry procedure
+                before shift start. 14 attendees. No safety observations
+                pending from yesterday's walkthrough.
+
+---------------------------------------------
+ACTIVITIES COMPLETED / IN PROGRESS
+---------------------------------------------
+
+07:30 – 11:00   CIVIL
+                F-12 foundation concrete pour completed. Curing started.
+                Formwork strip scheduled for tomorrow subject to strength
+                test.
+
+09:00 – 14:00   PIPING
+                Spool erected at Line 24"-XX. Approx. 60% complete —
+                remaining welds pending fit-up inspection tomorrow AM.
+
+09:15 – 12:00   ELECTRICAL
+                MCC-3 panel termination work started. Scope of remaining
+                terminations to be confirmed with electrical engineer;
+                notes from crew lead were unclear on which feeders are
+                covered under this work order.
+
+10:00 – 15:30   ELECTRICAL
+                Cable tray run CT-14 pulled — 2 of 3 sections complete.
+                Third section held up pending support bracket delivery.
+
+13:00 – 16:00   INSTRUMENTATION
+                Flow transmitter FT-201 mounted at tie-in point.
+                Awaiting calibration, scheduled for day after tomorrow.
+
+---------------------------------------------
+MATERIAL / EQUIPMENT NOTES
+---------------------------------------------
+- Concrete batch delivered on schedule, no rejection.
+- Support brackets for CT-14 section 3 delayed at stores, follow up
+  with procurement.
+- Welding consumables stock sufficient for next 2 days.
+
+---------------------------------------------
+ISSUES / DELAYS
+---------------------------------------------
+None significant. Minor delay expected on CT-14 completion (~1 day)
+pending bracket delivery.
+
+---------------------------------------------
+PLAN FOR NEXT SHIFT
+---------------------------------------------
+- Complete remaining welds on Line 24"-XX, subject to inspection.
+- Strip formwork on F-12 if strength test clears.
+- Continue MCC-3 termination once scope is clarified.
+- Calibrate FT-201.
+
+Signed: J. Sharma
