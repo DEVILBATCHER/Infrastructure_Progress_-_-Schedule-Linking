@@ -51,4 +51,7 @@ class ActivityMatch(Base):
     confidence_score = Column(Numeric(4, 3), nullable=False)
     status = Column(String(50), default="PENDING") # AUTO_APPROVED, PENDING, MANUALLY_APPROVED, REJECTED
     reviewed_at = Column(DateTime(timezone=True), nullable=True)
+    reviewed_by = Column(String, nullable=True, default="Site Planner")
+    review_remarks = Column(String, nullable=True)
+    
 
