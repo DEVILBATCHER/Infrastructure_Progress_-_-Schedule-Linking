@@ -1,0 +1,465 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Schedule-Linking Review</title>
+<style>
+  :root {
+    --ink: #1c1917;
+    --muted: #78716c;
+    --faint: #a8a29e;
+    --bg: #fafaf9;
+    --panel: #f5f5f4;
+    --border: #e7e5e4;
+    --border-strong: #d6d3d1;
+    --green-bg: #ecfdf5; --green-text: #047857; --green-ring: #a7f3d0;
+    --amber-bg: #fffbeb; --amber-text: #b45309; --amber-ring: #fde68a;
+    --red-bg: #fef2f2;  --red-text: #b91c1c;  --red-ring: #fecaca;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); }
+
+  .app {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    height: 100vh;
+  }
+
+  /* ---------- sidebar / upload ---------- */
+
+  .sidebar {
+    border-right: 1px solid var(--border);
+    background: var(--panel);
+    display: flex;
+    flex-direction: column;
+  }
+
+  .dropzone {
+    margin: 16px;
+    padding: 28px 16px;
+    border: 2px dashed var(--border-strong);
+    border-radius: 12px;
+    background: #fff;
+    text-align: center;
+    cursor: pointer;
+  }
+  .dropzone:hover { border-color: var(--muted); }
+  .dropzone svg { color: var(--faint); margin-bottom: 8px; }
+  .dropzone .title { font-size: 14px; font-weight: 600; }
+  .dropzone .sub { font-size: 12px; color: var(--faint); margin-top: 2px; }
+
+  .upload-list { flex: 1; overflow-y: auto; padding: 0 8px 16px; }
+  .upload-label {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--faint); padding: 0 8px 4px;
+  }
+  .upload-item {
+    display: flex; gap: 8px; align-items: flex-start;
+    width: 100%; text-align: left; padding: 8px; border: none;
+    background: none; border-radius: 8px; cursor: pointer;
+  }
+  .upload-item:hover { background: #eeeeec; }
+  .upload-item.active { background: #e7e5e2; }
+  .upload-item .icon { color: var(--faint); margin-top: 2px; flex-shrink: 0; }
+  .upload-item .name { font-size: 13.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .upload-item .meta { font-size: 12px; color: var(--faint); }
+  .empty-hint { font-size: 13px; color: var(--faint); padding: 10px 8px; }
+
+  /* ---------- main panel ---------- */
+
+  .main { display: flex; flex-direction: column; overflow: hidden; }
+
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 20px; border-bottom: 1px solid var(--border);
+  }
+  .tabs { display: flex; gap: 4px; }
+  .tab {
+    padding: 6px 12px; border-radius: 8px; border: none; background: none;
+    font-size: 13.5px; font-weight: 600; color: var(--muted); cursor: pointer;
+  }
+  .tab.active { background: var(--ink); color: #fff; }
+
+  .bulk-btn {
+    padding: 6px 12px; border-radius: 8px; font-size: 13px; font-weight: 600;
+    border: 1px solid var(--green-ring); background: var(--green-bg); color: var(--green-text);
+    cursor: pointer;
+  }
+  .bulk-btn:hover { filter: brightness(0.97); }
+
+  .content { flex: 1; overflow-y: auto; padding: 20px; }
+
+  .placeholder {
+    height: 100%; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; color: var(--faint); text-align: center; gap: 8px;
+  }
+
+  .spinner {
+    width: 22px; height: 22px; border-radius: 50%;
+    border: 3px solid var(--border-strong); border-top-color: var(--ink);
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ---------- candidate card ---------- */
+
+  .cand-list { display: flex; flex-direction: column; gap: 10px; }
+
+  .cand {
+    border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px;
+    background: #fff;
+  }
+  .cand.approved { border-color: var(--green-ring); background: var(--green-bg); }
+  .cand.rejected { border-color: var(--red-ring); background: var(--red-bg); opacity: .7; }
+
+  .cand-top { display: flex; justify-content: space-between; gap: 12px; }
+  .cand-text { font-size: 13.5px; }
+  .cand-tags { margin-top: 6px; display: flex; gap: 10px; flex-wrap: wrap; }
+  .disc-tag {
+    font-size: 11px; font-weight: 700; background: #ede9e6; color: var(--muted);
+    padding: 2px 7px; border-radius: 5px;
+  }
+  .time-tag { font-size: 12px; color: var(--faint); }
+
+  .conf {
+    flex-shrink: 0; font-size: 12px; font-weight: 700; padding: 4px 10px;
+    border-radius: 999px; border: 1px solid transparent; white-space: nowrap;
+  }
+  .conf.high { background: var(--green-bg); color: var(--green-text); border-color: var(--green-ring); }
+  .conf.med  { background: var(--amber-bg); color: var(--amber-text); border-color: var(--amber-ring); }
+  .conf.low  { background: var(--red-bg);  color: var(--red-text);  border-color: var(--red-ring); }
+
+  .cand-bottom {
+    margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  }
+
+  .match-select {
+    font-size: 13.5px; font-weight: 600; border: none; background: none;
+    padding: 4px 0; cursor: pointer; color: var(--ink); max-width: 100%;
+  }
+  .match-select.unmatched { color: var(--amber-text); }
+  .match-select:disabled { cursor: default; opacity: .8; }
+
+  .actions { display: flex; gap: 6px; flex-shrink: 0; }
+  .btn {
+    display: flex; align-items: center; gap: 5px; font-size: 13px; font-weight: 600;
+    padding: 6px 10px; border-radius: 8px; cursor: pointer;
+  }
+  .btn-reject { border: 1px solid var(--border-strong); background: #fff; color: var(--muted); }
+  .btn-reject:hover { border-color: var(--red-ring); background: var(--red-bg); color: var(--red-text); }
+  .btn-approve { border: none; background: var(--ink); color: #fff; }
+  .btn-approve:hover { background: #3f3a37; }
+  .btn-approve:disabled { background: var(--border-strong); color: #fff; cursor: not-allowed; }
+
+  .status-label { font-size: 12px; font-weight: 700; flex-shrink: 0; }
+  .status-label.approved { color: var(--green-text); }
+  .status-label.rejected { color: var(--red-text); }
+
+  /* ---------- history ---------- */
+
+  .hist-row {
+    display: flex; justify-content: space-between; align-items: center; gap: 10px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 12px; font-size: 13px; margin-bottom: 6px;
+  }
+  .hist-row .name { font-weight: 600; }
+  .hist-row .sub { font-size: 12px; color: var(--faint); }
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <aside class="sidebar">
+    <div class="dropzone" id="dropzone">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0-12 4 4m-4-4-4 4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+      <div class="title">Upload daily report</div>
+      <div class="sub">.txt, .csv, .xlsx — click to choose</div>
+    </div>
+    <input type="file" id="fileInput" multiple style="display:none">
+
+    <div class="upload-list">
+      <div class="upload-label">Uploads</div>
+      <div id="uploadItems"><div class="empty-hint">No files yet.</div></div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">
+      <div class="tabs">
+        <button class="tab active" id="tabReview">Review</button>
+        <button class="tab" id="tabHistory">History</button>
+      </div>
+      <button class="bulk-btn" id="bulkBtn" style="display:none;"></button>
+    </div>
+    <div class="content" id="content">
+      <div class="placeholder">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0-12 4 4m-4-4-4 4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+        <p>Upload a daily report or spreadsheet to see extracted activities here.</p>
+      </div>
+    </div>
+  </main>
+
+</div>
+
+<script>
+// ---------------------------------------------------------------------------
+// Mock schedule. In the real app: GET /api/schedule/activities
+// ---------------------------------------------------------------------------
+const SCHEDULE = [
+  { activityId: "L6-PIP-0042", activityName: 'Erect Line 24"-XX', discipline: "Piping" },
+  { activityId: "L6-PIP-0043", activityName: 'Weld Line 24"-XX Joint 3', discipline: "Piping" },
+  { activityId: "L6-CIV-0117", activityName: "Pour Foundation F-12 Concrete", discipline: "Civil" },
+  { activityId: "L6-CIV-0118", activityName: "Cure & Strip Formwork F-12", discipline: "Civil" },
+  { activityId: "L6-ELE-0088", activityName: "Pull Cable Tray Run CT-14", discipline: "Electrical" },
+  { activityId: "L6-ELE-0089", activityName: "Terminate MCC Panel MCC-3", discipline: "Electrical" },
+  { activityId: "L6-INS-0021", activityName: "Install Flow Transmitter FT-201", discipline: "Instrumentation" },
+  { activityId: "L6-HSE-0005", activityName: "Toolbox Talk — Confined Space Entry", discipline: "HSE" },
+];
+
+// ---------------------------------------------------------------------------
+// Mock extraction. In the real app: GET /api/uploads/{id}/matches
+// ---------------------------------------------------------------------------
+function mockProcessFile(filename) {
+  const isSpreadsheet = /\.(xlsx|xls|csv)$/i.test(filename);
+  const base = isSpreadsheet ? [
+    { extractedText: "spool erected at line 24-XX, approx 60% complete", discipline: "Piping",
+      matchedActivity: SCHEDULE[0], confidenceScore: 0.87, start: "09:00", end: "14:00" },
+    { extractedText: "F-12 concrete pour finished, curing started", discipline: "Civil",
+      matchedActivity: SCHEDULE[2], confidenceScore: 0.93, start: "07:30", end: "11:00" },
+    { extractedText: "cable tray CT-14 pulled, tray 2 of 3 sections", discipline: "Electrical",
+      matchedActivity: null, confidenceScore: 0.41, start: "10:00", end: "15:30" },
+  ] : [
+    { extractedText: "toolbox talk on confined space held before shift, 14 attendees", discipline: "HSE",
+      matchedActivity: SCHEDULE[7], confidenceScore: 0.95, start: "06:30", end: "06:50" },
+    { extractedText: "flow transmitter FT-201 mounted, awaiting calibration", discipline: "Instrumentation",
+      matchedActivity: SCHEDULE[6], confidenceScore: 0.74, start: "13:00", end: "16:00" },
+    { extractedText: "MCC-3 panel termination started, discipline notes unclear on scope", discipline: "Electrical",
+      matchedActivity: null, confidenceScore: 0.35, start: "09:15", end: "12:00" },
+  ];
+  return base.map((c, i) => ({ candidateId: filename + "-c" + i, status: "pending", ...c }));
+}
+
+function confBand(score) {
+  if (score >= 0.75) return "high";
+  if (score >= 0.55) return "med";
+  return "low";
+}
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+let uploads = [];   // { id, filename, status: 'processing'|'processed', candidates: [] }
+let activeId = null;
+let history = [];   // decided candidates
+let tab = "review";
+
+const uploadItemsEl = document.getElementById("uploadItems");
+const contentEl = document.getElementById("content");
+const bulkBtn = document.getElementById("bulkBtn");
+const tabReview = document.getElementById("tabReview");
+const tabHistory = document.getElementById("tabHistory");
+const dropzone = document.getElementById("dropzone");
+const fileInput = document.getElementById("fileInput");
+
+dropzone.addEventListener("click", () => fileInput.click());
+fileInput.addEventListener("change", (e) => {
+  Array.from(e.target.files).forEach(handleUpload);
+  fileInput.value = "";
+});
+
+tabReview.addEventListener("click", () => { tab = "review"; render(); });
+tabHistory.addEventListener("click", () => { tab = "history"; render(); });
+
+function handleUpload(file) {
+  const id = file.name + "-" + Date.now();
+  uploads.push({ id, filename: file.name, status: "processing", candidates: [] });
+  activeId = id;
+  tab = "review";
+  render();
+  setTimeout(() => {
+    const u = uploads.find((x) => x.id === id);
+    if (!u) return;
+    u.status = "processed";
+    u.candidates = mockProcessFile(file.name);
+    render();
+  }, 900);
+}
+
+function decide(candidateId, status) {
+  const u = uploads.find((x) => x.id === activeId);
+  if (!u) return;
+  const c = u.candidates.find((x) => x.candidateId === candidateId);
+  if (!c) return;
+  c.status = status;
+  history.unshift({ ...c, sourceFile: u.filename, decidedAt: new Date() });
+  render();
+}
+
+function reassign(candidateId, activityId) {
+  const u = uploads.find((x) => x.id === activeId);
+  if (!u) return;
+  const c = u.candidates.find((x) => x.candidateId === candidateId);
+  if (!c) return;
+  c.matchedActivity = SCHEDULE.find((a) => a.activityId === activityId) || null;
+  if (c.matchedActivity) c.confidenceScore = 1;
+  render();
+}
+
+function bulkApprove() {
+  const u = uploads.find((x) => x.id === activeId);
+  if (!u) return;
+  u.candidates
+    .filter((c) => c.status === "pending" && c.matchedActivity && c.confidenceScore >= 0.75)
+    .forEach((c) => decide(c.candidateId, "approved"));
+}
+bulkBtn.addEventListener("click", bulkApprove);
+
+// ---------------------------------------------------------------------------
+// Render
+// ---------------------------------------------------------------------------
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function render() {
+  tabReview.classList.toggle("active", tab === "review");
+  tabHistory.classList.toggle("active", tab === "history");
+  renderSidebar();
+  if (tab === "history") renderHistory();
+  else renderReview();
+}
+
+function renderSidebar() {
+  if (uploads.length === 0) {
+    uploadItemsEl.innerHTML = '<div class="empty-hint">No files yet.</div>';
+    return;
+  }
+  uploadItemsEl.innerHTML = uploads.map((u) => {
+    const pending = u.candidates.filter((c) => c.status === "pending").length;
+    const meta = u.status === "processing" ? "Processing…" : pending + " of " + u.candidates.length + " pending review";
+    const isSheet = /\.(xlsx|xls|csv)$/i.test(u.filename);
+    const icon = isSheet
+      ? '<svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>'
+      : '<svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>';
+    return `<button class="upload-item ${u.id === activeId ? "active" : ""}" data-id="${u.id}">
+      ${icon}
+      <div>
+        <div class="name">${escapeHtml(u.filename)}</div>
+        <div class="meta">${meta}</div>
+      </div>
+    </button>`;
+  }).join("");
+
+  uploadItemsEl.querySelectorAll(".upload-item").forEach((btn) => {
+    btn.addEventListener("click", () => { activeId = btn.dataset.id; tab = "review"; render(); });
+  });
+}
+
+function renderReview() {
+  const u = uploads.find((x) => x.id === activeId);
+
+  if (!u) {
+    bulkBtn.style.display = "none";
+    contentEl.innerHTML = `<div class="placeholder">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0-12 4 4m-4-4-4 4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+      <p>Upload a daily report or spreadsheet to see extracted activities here.</p>
+    </div>`;
+    return;
+  }
+
+  if (u.status === "processing") {
+    bulkBtn.style.display = "none";
+    contentEl.innerHTML = `<div class="placeholder">
+      <div class="spinner"></div>
+      <p>Extracting activities and matching to the schedule…</p>
+    </div>`;
+    return;
+  }
+
+  const highConfPending = u.candidates.filter((c) => c.status === "pending" && c.matchedActivity && c.confidenceScore >= 0.75);
+  if (highConfPending.length > 0) {
+    bulkBtn.style.display = "inline-block";
+    bulkBtn.textContent = "Approve " + highConfPending.length + " high-confidence match" + (highConfPending.length > 1 ? "es" : "");
+  } else {
+    bulkBtn.style.display = "none";
+  }
+
+  contentEl.innerHTML = `<div class="cand-list">${u.candidates.map(renderCandidate).join("")}</div>`;
+
+  u.candidates.forEach((c) => {
+    const card = contentEl.querySelector(`[data-cid="${c.candidateId}"]`);
+    if (!card) return;
+    const approveBtn = card.querySelector(".btn-approve");
+    const rejectBtn = card.querySelector(".btn-reject");
+    const select = card.querySelector(".match-select");
+    if (approveBtn) approveBtn.addEventListener("click", () => decide(c.candidateId, "approved"));
+    if (rejectBtn) rejectBtn.addEventListener("click", () => decide(c.candidateId, "rejected"));
+    if (select) select.addEventListener("change", (e) => reassign(c.candidateId, e.target.value));
+  });
+}
+
+function renderCandidate(c) {
+  const band = confBand(c.confidenceScore);
+  const decided = c.status !== "pending";
+  const cardClass = c.status === "approved" ? "approved" : c.status === "rejected" ? "rejected" : "";
+
+  const options = ['<option value="">— no match —</option>']
+    .concat(SCHEDULE.map((a) =>
+      `<option value="${a.activityId}" ${c.matchedActivity?.activityId === a.activityId ? "selected" : ""}>
+        ${escapeHtml(a.activityName)} (${a.activityId})
+      </option>`
+    )).join("");
+
+  const selectClass = "match-select" + (c.matchedActivity ? "" : " unmatched");
+
+  const actions = decided
+    ? `<span class="status-label ${c.status}">${c.status === "approved" ? "Approved" : "Rejected"}</span>`
+    : `<div class="actions">
+        <button class="btn btn-reject">✕ Reject</button>
+        <button class="btn btn-approve" ${c.matchedActivity ? "" : "disabled"}>✓ Approve</button>
+      </div>`;
+
+  return `<div class="cand ${cardClass}" data-cid="${c.candidateId}">
+    <div class="cand-top">
+      <div class="cand-text">
+        "${escapeHtml(c.extractedText)}"
+        <div class="cand-tags">
+          <span class="disc-tag">${c.discipline}</span>
+          <span class="time-tag">${c.start} – ${c.end}</span>
+        </div>
+      </div>
+      <span class="conf ${band}">${band === "high" ? "High" : band === "med" ? "Medium" : "Low"} · ${Math.round(c.confidenceScore * 100)}%</span>
+    </div>
+    <div class="cand-bottom">
+      <select class="${selectClass}" ${decided ? "disabled" : ""}>${options}</select>
+      ${actions}
+    </div>
+  </div>`;
+}
+
+function renderHistory() {
+  bulkBtn.style.display = "none";
+  if (history.length === 0) {
+    contentEl.innerHTML = '<p class="empty-hint">No decisions yet — approve or reject a match to see it here.</p>';
+    return;
+  }
+  contentEl.innerHTML = history.map((h) => `
+    <div class="hist-row">
+      <div>
+        <div class="name">${escapeHtml(h.matchedActivity?.activityName || "Unmatched activity")}</div>
+        <div class="sub">${escapeHtml(h.sourceFile)} · ${h.decidedAt.toLocaleString()}</div>
+      </div>
+      <span class="status-label ${h.status}">${h.status === "approved" ? "Approved" : "Rejected"}</span>
+    </div>
+  `).join("");
+}
+
+render();
+</script>
+</body>
+</html>
