@@ -1,0 +1,852 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Schedule-Linking Review - Code Nomads</title>
+<style>
+  :root {
+    --bg: #f8fafc;
+    --panel: #ffffff;
+    --sidebar-bg: #f1f5f9;
+    --ink: #0f172a;
+    --muted: #64748b;
+    --faint: #94a3b8;
+    --border: #e2e8f0;
+    --border-strong: #cbd5e1;
+    --primary: #2563eb;
+    --primary-hover: #1d4ed8;
+    
+    --green-bg: #f0fdf4;  --green-text: #15803d; --green-ring: #bbf7d0;
+    --amber-bg: #fffbeb;  --amber-text: #b45309; --amber-ring: #fde68a;
+    --red-bg: #fef2f2;    --red-text: #b91c1c;   --red-ring: #fecaca;
+
+    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+    --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.07), 0 2px 4px -2px rgb(0 0 0 / 0.05);
+    --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+    --radius-lg: 12px;
+    --radius-md: 8px;
+    
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); -webkit-font-smoothing: antialiased; }
+
+  .app {
+    display: grid;
+    grid-template-columns: 290px 1fr;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  /* ---------- Sidebar / Upload ---------- */
+
+  .sidebar {
+    border-right: 1px solid var(--border);
+    background: var(--sidebar-bg);
+    display: flex;
+    flex-direction: column;
+    padding: 16px;
+    gap: 16px;
+  }
+
+  .brand {
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px;
+  }
+  .brand-icon {
+    width: 24px;
+    height: 24px;
+    background: var(--primary);
+    border-radius: 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+  }
+
+  .dropzone {
+    padding: 24px 16px;
+    border: 2px dashed var(--border-strong);
+    border-radius: var(--radius-lg);
+    background: #ffffff;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    box-shadow: var(--shadow-sm);
+  }
+  .dropzone:hover, .dropzone.dragover {
+    border-color: var(--primary);
+    background: #eff6ff;
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-md);
+  }
+  .dropzone-icon-wrapper {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: #f1f5f9;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 10px;
+    color: var(--muted);
+    transition: all 0.2s ease;
+  }
+  .dropzone:hover .dropzone-icon-wrapper {
+    background: #dbeafe;
+    color: var(--primary);
+  }
+  .dropzone .title { font-size: 13.5px; font-weight: 600; color: var(--ink); }
+  .dropzone .sub { font-size: 12px; color: var(--muted); margin-top: 3px; }
+
+  .upload-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+  .upload-label {
+    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--muted); padding: 8px 8px 4px;
+  }
+  .upload-item {
+    display: flex; gap: 8px; align-items: center;
+    width: 100%; text-align: left; padding: 10px 10px; border: 1px solid transparent;
+    background: transparent; border-radius: var(--radius-md); cursor: pointer;
+    transition: all 0.15s ease; position: relative;
+  }
+  .upload-item:hover { background: #e2e8f0; }
+  .upload-item.active { background: #ffffff; border-color: var(--border); box-shadow: var(--shadow-sm); }
+  .upload-item .icon { color: var(--muted); flex-shrink: 0; }
+  .upload-item .info { min-width: 0; flex: 1; }
+  .upload-item .name { font-size: 13px; font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .upload-item .meta { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+
+  /* Upload Item Actions */
+  .upload-actions {
+    display: flex; gap: 2px; opacity: 0; transition: opacity 0.15s ease; flex-shrink: 0;
+  }
+  .upload-item:hover .upload-actions { opacity: 1; }
+  
+  .icon-btn {
+    border: none; background: transparent; padding: 5px; border-radius: 6px;
+    color: var(--muted); cursor: pointer; transition: all 0.15s ease; display: inline-flex;
+    align-items: center; justify-content: center;
+  }
+  .icon-btn:hover { background: #cbd5e1; color: var(--ink); transform: scale(1.08); }
+  .icon-btn.btn-read:hover { background: #e0e7ff; color: #4338ca; }
+  .icon-btn.btn-change:hover { background: #dbeafe; color: var(--primary); }
+  .icon-btn.btn-delete:hover { background: var(--red-bg); color: var(--red-text); }
+
+  .empty-hint { font-size: 13px; color: var(--muted); padding: 12px; text-align: center; }
+
+  /* ---------- Main Panel ---------- */
+
+  .main { display: flex; flex-direction: column; overflow: hidden; background: var(--panel); }
+
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 24px; border-bottom: 1px solid var(--border);
+    background: #ffffff;
+  }
+  .tabs { display: flex; gap: 4px; background: #f1f5f9; padding: 3px; border-radius: 8px; }
+  .tab {
+    padding: 6px 14px; border-radius: 6px; border: none; background: none;
+    font-size: 13px; font-weight: 600; color: var(--muted); cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .tab:hover:not(.active) { background: #e2e8f0; color: var(--ink); }
+  .tab.active { background: #ffffff; color: var(--ink); box-shadow: var(--shadow-sm); }
+
+  .bulk-btn {
+    padding: 7px 14px; border-radius: var(--radius-md); font-size: 13px; font-weight: 600;
+    border: 1px solid var(--green-ring); background: var(--green-bg); color: var(--green-text);
+    cursor: pointer; transition: all 0.15s ease; display: inline-flex; align-items: center; gap: 6px;
+  }
+  .bulk-btn:hover { background: #dcfce7; border-color: #86efac; transform: translateY(-1px); box-shadow: var(--shadow-sm); }
+
+  .content { flex: 1; overflow-y: auto; padding: 24px; background: var(--bg); }
+
+  .placeholder {
+    height: 100%; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; color: var(--muted); text-align: center; gap: 12px;
+  }
+  .placeholder-icon {
+    width: 48px; height: 48px; border-radius: 12px; background: #e2e8f0;
+    display: flex; align-items: center; justify-content: center; color: var(--muted);
+  }
+
+  .spinner {
+    width: 24px; height: 24px; border-radius: 50%;
+    border: 3px solid var(--border-strong); border-top-color: var(--primary);
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ---------- Candidate Card ---------- */
+
+  .cand-list { display: flex; flex-direction: column; gap: 14px; max-width: 860px; margin: 0 auto; }
+
+  .cand {
+    border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 16px;
+    background: #ffffff; box-shadow: var(--shadow-sm); transition: all 0.2s ease;
+  }
+  .cand:hover { box-shadow: var(--shadow-md); border-color: var(--border-strong); }
+  .cand.approved { border-color: var(--green-ring); background: #fafdfb; }
+  .cand.rejected { border-color: var(--red-ring); background: #fffcfc; opacity: .75; }
+
+  .cand-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+  .cand-text-wrapper { flex: 1; }
+  .cand-text { font-size: 14px; font-weight: 500; color: var(--ink); line-height: 1.4; }
+  .cand-tags { margin-top: 8px; display: flex; gap: 8px; align-items: center; }
+  .disc-tag {
+    font-size: 11px; font-weight: 600; background: #f1f5f9; color: var(--muted);
+    padding: 3px 8px; border-radius: 6px; text-transform: uppercase; letter-spacing: 0.03em;
+  }
+  .time-tag { font-size: 12px; color: var(--faint); font-weight: 500; }
+
+  .conf {
+    flex-shrink: 0; font-size: 11.5px; font-weight: 700; padding: 4px 10px;
+    border-radius: 999px; border: 1px solid transparent; display: inline-flex; align-items: center; gap: 4px;
+  }
+  .conf.high { background: var(--green-bg); color: var(--green-text); border-color: var(--green-ring); }
+  .conf.med  { background: var(--amber-bg); color: var(--amber-text); border-color: var(--amber-ring); }
+  .conf.low  { background: var(--red-bg);   color: var(--red-text);   border-color: var(--red-ring); }
+
+  .cand-bottom {
+    margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  }
+
+  .match-wrapper {
+    display: flex; align-items: center; gap: 8px; flex: 1; max-width: 70%;
+  }
+  .match-label { font-size: 12px; font-weight: 600; color: var(--muted); flex-shrink: 0; }
+  
+  .match-select-container {
+    position: relative; flex: 1; display: flex; align-items: center;
+  }
+  .match-select {
+    width: 100%; font-size: 13px; font-weight: 600; color: var(--ink);
+    padding: 6px 28px 6px 10px; border-radius: var(--radius-md); border: 1px solid var(--border);
+    background: #f8fafc; cursor: pointer; appearance: none; transition: all 0.15s ease;
+    text-overflow: ellipsis; white-space: nowrap; overflow: hidden;
+  }
+  .match-select:hover:not(:disabled) { border-color: var(--border-strong); background: #ffffff; }
+  .match-select.unmatched { color: var(--amber-text); border-color: var(--amber-ring); background: var(--amber-bg); }
+  .match-select:disabled { opacity: 0.7; cursor: default; background: transparent; border-color: transparent; padding-left: 0; }
+
+  .select-arrow {
+    position: absolute; right: 10px; pointer-events: none; color: var(--muted);
+  }
+
+  .actions { display: flex; gap: 8px; flex-shrink: 0; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600;
+    padding: 6px 12px; border-radius: var(--radius-md); cursor: pointer; transition: all 0.15s ease;
+  }
+  .btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: var(--shadow-sm); }
+  .btn-secondary { border: 1px solid var(--border-strong); background: #ffffff; color: var(--ink); }
+  .btn-secondary:hover { background: #f1f5f9; }
+  .btn-reject { border: 1px solid var(--border-strong); background: #ffffff; color: var(--muted); }
+  .btn-reject:hover { border-color: var(--red-ring); background: var(--red-bg); color: var(--red-text); }
+  .btn-approve { border: 1px solid transparent; background: var(--primary); color: #ffffff; }
+  .btn-approve:hover { background: var(--primary-hover); }
+  .btn-approve:disabled { background: var(--border); color: var(--faint); border-color: transparent; cursor: not-allowed; transform: none; }
+
+  .status-label {
+    font-size: 12px; font-weight: 700; flex-shrink: 0; padding: 4px 10px; border-radius: 6px;
+  }
+  .status-label.approved { background: var(--green-bg); color: var(--green-text); }
+  .status-label.rejected { background: var(--red-bg); color: var(--red-text); }
+
+  /* ---------- History ---------- */
+
+  .hist-list { display: flex; flex-direction: column; gap: 8px; max-width: 860px; margin: 0 auto; }
+  .hist-row {
+    display: flex; justify-content: space-between; align-items: center; gap: 12px;
+    background: #ffffff; border: 1px solid var(--border); border-radius: var(--radius-md);
+    padding: 12px 16px; font-size: 13px; box-shadow: var(--shadow-sm); transition: all 0.15s ease;
+  }
+  .hist-row:hover { border-color: var(--border-strong); box-shadow: var(--shadow-md); }
+  .hist-row .name { font-weight: 600; color: var(--ink); }
+  .hist-row .sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+  /* ---------- Modal (Report Reader & Editor) ---------- */
+
+  .modal-overlay {
+    position: fixed; inset: 0; background: rgba(15, 23, 42, 0.4);
+    backdrop-filter: blur(3px); z-index: 1000; display: flex;
+    align-items: center; justify-content: center; opacity: 0;
+    pointer-events: none; transition: opacity 0.2s ease;
+  }
+  .modal-overlay.open { opacity: 1; pointer-events: auto; }
+
+  .modal {
+    background: #ffffff; border-radius: var(--radius-lg); width: 90%;
+    max-width: 780px; max-height: 85vh; display: flex; flex-direction: column;
+    box-shadow: var(--shadow-lg); overflow: hidden; animation: modalIn 0.2s ease;
+  }
+  @keyframes modalIn { from { transform: scale(0.96); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+
+  .modal-header {
+    padding: 16px 20px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between; background: #ffffff;
+  }
+  .modal-title { font-size: 15px; font-weight: 700; color: var(--ink); display: flex; align-items: center; gap: 8px; }
+  .close-btn { border: none; background: transparent; font-size: 20px; color: var(--muted); cursor: pointer; border-radius: 6px; padding: 2px 8px; }
+  .close-btn:hover { background: #f1f5f9; color: var(--ink); }
+
+  .modal-body { padding: 20px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 14px; background: var(--bg); }
+
+  .report-item-card {
+    background: #ffffff; border: 1px solid var(--border); border-radius: var(--radius-md);
+    padding: 14px; display: flex; flex-direction: column; gap: 10px; box-shadow: var(--shadow-sm);
+  }
+  .report-item-header { display: flex; justify-content: space-between; align-items: center; font-size: 12px; font-weight: 700; color: var(--muted); }
+  
+  .form-group { display: flex; flex-direction: column; gap: 4px; }
+  .form-group label { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; }
+  .form-input, .form-textarea, .form-select {
+    width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px;
+    font-size: 13px; font-family: inherit; color: var(--ink); background: #ffffff; transition: border 0.15s ease;
+  }
+  .form-input:focus, .form-textarea:focus, .form-select:focus {
+    outline: none; border-color: var(--primary); box-shadow: 0 0 0 2px #dbeafe;
+  }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .grid-3 { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 10px; }
+
+  .modal-footer {
+    padding: 14px 20px; border-top: 1px solid var(--border); background: #ffffff;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-icon">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+      </div>
+      Code Nomads
+    </div>
+
+    <div class="dropzone" id="dropzone">
+      <div class="dropzone-icon-wrapper">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      </div>
+      <div class="title">Upload daily report</div>
+      <div class="sub">.txt, .csv, .xlsx — drag or click</div>
+    </div>
+    <input type="file" id="fileInput" multiple style="display:none">
+    <input type="file" id="changeFileInput" style="display:none">
+
+    <div class="upload-list">
+      <div class="upload-label">Recent Uploads</div>
+      <div id="uploadItems"><div class="empty-hint">No files added yet.</div></div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">
+      <div class="tabs">
+        <button class="tab active" id="tabReview">Review Queue</button>
+        <button class="tab" id="tabHistory">Match History</button>
+      </div>
+      <button class="bulk-btn" id="bulkBtn" style="display:none;"></button>
+    </div>
+    <div class="content" id="content">
+      <div class="placeholder">
+        <div class="placeholder-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        </div>
+        <p>Upload a daily report or spreadsheet to review automated schedule matches.</p>
+      </div>
+    </div>
+  </main>
+
+</div>
+
+<!-- Modal for Reading & Editing Reports -->
+<div class="modal-overlay" id="reportModalOverlay">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title" id="modalTitle">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/></svg>
+        <span>Read & Edit Report Contents</span>
+      </div>
+      <button class="close-btn" id="closeModalBtn">&times;</button>
+    </div>
+    <div class="modal-body" id="modalBody">
+      <!-- Dynamically filled with entries -->
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" id="addEntryBtn">+ Add Entry</button>
+      <div style="display: flex; gap: 8px;">
+        <button class="btn btn-secondary" id="cancelModalBtn">Cancel</button>
+        <button class="btn btn-approve" id="saveModalBtn">Save Changes</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// Mock Schedule Data
+const SCHEDULE = [
+  { activityId: "L6-PIP-0042", activityName: 'Erect Line 24"-XX', discipline: "Piping" },
+  { activityId: "L6-PIP-0043", activityName: 'Weld Line 24"-XX Joint 3', discipline: "Piping" },
+  { activityId: "L6-CIV-0117", activityName: "Pour Foundation F-12 Concrete", discipline: "Civil" },
+  { activityId: "L6-CIV-0118", activityName: "Cure & Strip Formwork F-12", discipline: "Civil" },
+  { activityId: "L6-ELE-0088", activityName: "Pull Cable Tray Run CT-14", discipline: "Electrical" },
+  { activityId: "L6-ELE-0089", activityName: "Terminate MCC Panel MCC-3", discipline: "Electrical" },
+  { activityId: "L6-INS-0021", activityName: "Install Flow Transmitter FT-201", discipline: "Instrumentation" },
+  { activityId: "L6-HSE-0005", activityName: "Toolbox Talk — Confined Space Entry", discipline: "HSE" },
+];
+
+function mockProcessFile(filename) {
+  const isSpreadsheet = /\.(xlsx|xls|csv)$/i.test(filename);
+  const base = isSpreadsheet ? [
+    { extractedText: "spool erected at line 24-XX, approx 60% complete", discipline: "Piping",
+      matchedActivity: SCHEDULE[0], confidenceScore: 0.87, start: "09:00", end: "14:00" },
+    { extractedText: "F-12 concrete pour finished, curing started", discipline: "Civil",
+      matchedActivity: SCHEDULE[2], confidenceScore: 0.93, start: "07:30", end: "11:00" },
+    { extractedText: "cable tray CT-14 pulled, tray 2 of 3 sections", discipline: "Electrical",
+      matchedActivity: null, confidenceScore: 0.41, start: "10:00", end: "15:30" },
+  ] : [
+    { extractedText: "toolbox talk on confined space held before shift, 14 attendees", discipline: "HSE",
+      matchedActivity: SCHEDULE[7], confidenceScore: 0.95, start: "06:30", end: "06:50" },
+    { extractedText: "flow transmitter FT-201 mounted, awaiting calibration", discipline: "Instrumentation",
+      matchedActivity: SCHEDULE[6], confidenceScore: 0.74, start: "13:00", end: "16:00" },
+    { extractedText: "MCC-3 panel termination started, discipline notes unclear on scope", discipline: "Electrical",
+      matchedActivity: null, confidenceScore: 0.35, start: "09:15", end: "12:00" },
+  ];
+  return base.map((c, i) => ({ candidateId: filename + "-c" + i, status: "pending", ...c }));
+}
+
+function confBand(score) {
+  if (score >= 0.75) return "high";
+  if (score >= 0.55) return "med";
+  return "low";
+}
+
+let uploads = [];   
+let activeId = null;
+let history = [];   
+let tab = "review";
+let changingUploadId = null;
+let editingUploadId = null;
+
+const uploadItemsEl = document.getElementById("uploadItems");
+const contentEl = document.getElementById("content");
+const bulkBtn = document.getElementById("bulkBtn");
+const tabReview = document.getElementById("tabReview");
+const tabHistory = document.getElementById("tabHistory");
+const dropzone = document.getElementById("dropzone");
+const fileInput = document.getElementById("fileInput");
+const changeFileInput = document.getElementById("changeFileInput");
+
+// Modal Elements
+const reportModalOverlay = document.getElementById("reportModalOverlay");
+const closeModalBtn = document.getElementById("closeModalBtn");
+const cancelModalBtn = document.getElementById("cancelModalBtn");
+const saveModalBtn = document.getElementById("saveModalBtn");
+const addEntryBtn = document.getElementById("addEntryBtn");
+const modalBody = document.getElementById("modalBody");
+const modalTitle = document.getElementById("modalTitle");
+
+// Drag and drop handlers
+dropzone.addEventListener("click", () => fileInput.click());
+dropzone.addEventListener("dragover", (e) => { e.preventDefault(); dropzone.classList.add("dragover"); });
+dropzone.addEventListener("dragleave", () => dropzone.classList.remove("dragover"));
+dropzone.addEventListener("drop", (e) => {
+  e.preventDefault();
+  dropzone.classList.remove("dragover");
+  if (e.dataTransfer.files.length) Array.from(e.dataTransfer.files).forEach(handleUpload);
+});
+
+fileInput.addEventListener("change", (e) => {
+  Array.from(e.target.files).forEach(handleUpload);
+  fileInput.value = "";
+});
+
+changeFileInput.addEventListener("change", (e) => {
+  if (e.target.files.length && changingUploadId) {
+    changeUpload(changingUploadId, e.target.files[0]);
+  }
+  changeFileInput.value = "";
+  changingUploadId = null;
+});
+
+tabReview.addEventListener("click", () => { tab = "review"; render(); });
+tabHistory.addEventListener("click", () => { tab = "history"; render(); });
+
+function handleUpload(file) {
+  const id = file.name + "-" + Date.now();
+  uploads.push({ id, filename: file.name, status: "processing", candidates: [] });
+  activeId = id;
+  tab = "review";
+  render();
+  setTimeout(() => {
+    const u = uploads.find((x) => x.id === id);
+    if (!u) return;
+    u.status = "processed";
+    u.candidates = mockProcessFile(file.name);
+    render();
+  }, 800);
+}
+
+function changeUpload(id, newFile) {
+  const u = uploads.find((x) => x.id === id);
+  if (!u) return;
+
+  history = history.filter((h) => h.uploadId !== id);
+
+  u.filename = newFile.name;
+  u.status = "processing";
+  u.candidates = [];
+  render();
+  setTimeout(() => {
+    const item = uploads.find((x) => x.id === id);
+    if (!item) return;
+    item.status = "processed";
+    item.candidates = mockProcessFile(newFile.name);
+    render();
+  }, 800);
+}
+
+function deleteUpload(id) {
+  uploads = uploads.filter((x) => x.id !== id);
+  history = history.filter((h) => h.uploadId !== id);
+
+  if (activeId === id) {
+    activeId = uploads.length > 0 ? uploads[0].id : null;
+  }
+  render();
+}
+
+/* ---------- Report Modal Reading & Editing Logic ---------- */
+
+function openReportModal(id) {
+  const u = uploads.find((x) => x.id === id);
+  if (!u) return;
+
+  editingUploadId = id;
+  modalTitle.querySelector("span").textContent = `Read & Edit: ${u.filename}`;
+  
+  modalBody.innerHTML = "";
+  u.candidates.forEach((c, idx) => renderModalEntry(c, idx));
+
+  reportModalOverlay.classList.add("open");
+}
+
+function closeReportModal() {
+  reportModalOverlay.classList.remove("open");
+  editingUploadId = null;
+}
+
+function renderModalEntry(candidate = {}, index) {
+  const card = document.createElement("div");
+  card.className = "report-item-card";
+  card.dataset.index = index;
+
+  card.innerHTML = `
+    <div class="report-item-header">
+      <span>ENTRY #${index + 1}</span>
+      <button class="icon-btn btn-delete remove-entry-btn" title="Remove Entry">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+      </button>
+    </div>
+    <div class="form-group">
+      <label>Extracted Log / Text</label>
+      <textarea class="form-textarea entry-text" rows="2" placeholder="Enter logged activity text...">${escapeHtml(candidate.extractedText || "")}</textarea>
+    </div>
+    <div class="grid-3">
+      <div class="form-group">
+        <label>Discipline</label>
+        <input class="form-input entry-disc" type="text" value="${escapeHtml(candidate.discipline || "General")}" placeholder="Discipline">
+      </div>
+      <div class="form-group">
+        <label>Start Time</label>
+        <input class="form-input entry-start" type="text" value="${escapeHtml(candidate.start || "08:00")}" placeholder="08:00">
+      </div>
+      <div class="form-group">
+        <label>End Time</label>
+        <input class="form-input entry-end" type="text" value="${escapeHtml(candidate.end || "12:00")}" placeholder="12:00">
+      </div>
+    </div>
+  `;
+
+  card.querySelector(".remove-entry-btn").addEventListener("click", () => card.remove());
+  modalBody.appendChild(card);
+}
+
+addEntryBtn.addEventListener("click", () => {
+  const count = modalBody.querySelectorAll(".report-item-card").length;
+  renderModalEntry({ extractedText: "", discipline: "General", start: "08:00", end: "17:00" }, count);
+  modalBody.scrollTop = modalBody.scrollHeight;
+});
+
+saveModalBtn.addEventListener("click", () => {
+  const u = uploads.find((x) => x.id === editingUploadId);
+  if (!u) return;
+
+  const cardElements = modalBody.querySelectorAll(".report-item-card");
+  const newCandidates = [];
+
+  cardElements.forEach((card, idx) => {
+    const text = card.querySelector(".entry-text").value.trim();
+    const disc = card.querySelector(".entry-disc").value.trim();
+    const start = card.querySelector(".entry-start").value.trim();
+    const end = card.querySelector(".entry-end").value.trim();
+
+    if (!text) return; // Skip empty entries
+
+    // Retain existing candidate status and activity link if text hasn't changed dramatically
+    const existing = u.candidates[idx] || {};
+    newCandidates.push({
+      candidateId: existing.candidateId || u.filename + "-c-custom-" + Date.now() + "-" + idx,
+      extractedText: text,
+      discipline: disc || "General",
+      start: start || "08:00",
+      end: end || "17:00",
+      status: existing.status || "pending",
+      matchedActivity: existing.matchedActivity || null,
+      confidenceScore: existing.confidenceScore || 0.50
+    });
+  });
+
+  u.candidates = newCandidates;
+  closeReportModal();
+  render();
+});
+
+closeModalBtn.addEventListener("click", closeReportModal);
+cancelModalBtn.addEventListener("click", closeReportModal);
+
+/* ---------- Core Application Functions ---------- */
+
+function decide(candidateId, status) {
+  const u = uploads.find((x) => x.id === activeId);
+  if (!u) return;
+  const c = u.candidates.find((x) => x.candidateId === candidateId);
+  if (!c) return;
+  c.status = status;
+
+  history.unshift({ 
+    ...c, 
+    uploadId: u.id, 
+    sourceFile: u.filename, 
+    decidedAt: new Date() 
+  });
+  render();
+}
+
+function reassign(candidateId, activityId) {
+  const u = uploads.find((x) => x.id === activeId);
+  if (!u) return;
+  const c = u.candidates.find((x) => x.candidateId === candidateId);
+  if (!c) return;
+  c.matchedActivity = SCHEDULE.find((a) => a.activityId === activityId) || null;
+  if (c.matchedActivity) c.confidenceScore = 1;
+  render();
+}
+
+function bulkApprove() {
+  const u = uploads.find((x) => x.id === activeId);
+  if (!u) return;
+  u.candidates
+    .filter((c) => c.status === "pending" && c.matchedActivity && c.confidenceScore >= 0.75)
+    .forEach((c) => decide(c.candidateId, "approved"));
+}
+bulkBtn.addEventListener("click", bulkApprove);
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function render() {
+  tabReview.classList.toggle("active", tab === "review");
+  tabHistory.classList.toggle("active", tab === "history");
+  renderSidebar();
+  if (tab === "history") renderHistory();
+  else renderReview();
+}
+
+function renderSidebar() {
+  if (uploads.length === 0) {
+    uploadItemsEl.innerHTML = '<div class="empty-hint">No files added yet.</div>';
+    return;
+  }
+  uploadItemsEl.innerHTML = uploads.map((u) => {
+    const pending = u.candidates.filter((c) => c.status === "pending").length;
+    const meta = u.status === "processing" ? "Processing…" : pending + " of " + u.candidates.length + " pending";
+    const isSheet = /\.(xlsx|xls|csv)$/i.test(u.filename);
+    const icon = isSheet
+      ? '<svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>'
+      : '<svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>';
+    return `<div class="upload-item ${u.id === activeId ? "active" : ""}" data-id="${u.id}">
+      ${icon}
+      <div class="info">
+        <div class="name" title="${escapeHtml(u.filename)}">${escapeHtml(u.filename)}</div>
+        <div class="meta">${meta}</div>
+      </div>
+      <div class="upload-actions">
+        <button class="icon-btn btn-read" data-id="${u.id}" title="Read & Edit Report">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+        </button>
+        <button class="icon-btn btn-change" data-id="${u.id}" title="Replace File">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+        </button>
+        <button class="icon-btn btn-delete" data-id="${u.id}" title="Delete File">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        </button>
+      </div>
+    </div>`;
+  }).join("");
+
+  uploadItemsEl.querySelectorAll(".upload-item").forEach((item) => {
+    item.addEventListener("click", () => { activeId = item.dataset.id; tab = "review"; render(); });
+  });
+
+  uploadItemsEl.querySelectorAll(".btn-read").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openReportModal(btn.dataset.id);
+    });
+  });
+
+  uploadItemsEl.querySelectorAll(".btn-change").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      changingUploadId = btn.dataset.id;
+      changeFileInput.click();
+    });
+  });
+
+  uploadItemsEl.querySelectorAll(".btn-delete").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      deleteUpload(btn.dataset.id);
+    });
+  });
+}
+
+function renderReview() {
+  const u = uploads.find((x) => x.id === activeId);
+
+  if (!u) {
+    bulkBtn.style.display = "none";
+    contentEl.innerHTML = `<div class="placeholder">
+      <div class="placeholder-icon">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+      </div>
+      <p>Upload a daily report or spreadsheet to review automated schedule matches.</p>
+    </div>`;
+    return;
+  }
+
+  if (u.status === "processing") {
+    bulkBtn.style.display = "none";
+    contentEl.innerHTML = `<div class="placeholder">
+      <div class="spinner"></div>
+      <p>Extracting activities and matching schedule items…</p>
+    </div>`;
+    return;
+  }
+
+  const highConfPending = u.candidates.filter((c) => c.status === "pending" && c.matchedActivity && c.confidenceScore >= 0.75);
+  if (highConfPending.length > 0) {
+    bulkBtn.style.display = "inline-flex";
+    bulkBtn.innerHTML = `✓ Approve ${highConfPending.length} high-confidence match${highConfPending.length > 1 ? "es" : ""}`;
+  } else {
+    bulkBtn.style.display = "none";
+  }
+
+  contentEl.innerHTML = `<div class="cand-list">${u.candidates.map(renderCandidate).join("")}</div>`;
+
+  u.candidates.forEach((c) => {
+    const card = contentEl.querySelector(`[data-cid="${c.candidateId}"]`);
+    if (!card) return;
+    const approveBtn = card.querySelector(".btn-approve");
+    const rejectBtn = card.querySelector(".btn-reject");
+    const select = card.querySelector(".match-select");
+    if (approveBtn) approveBtn.addEventListener("click", () => decide(c.candidateId, "approved"));
+    if (rejectBtn) rejectBtn.addEventListener("click", () => decide(c.candidateId, "rejected"));
+    if (select) select.addEventListener("change", (e) => reassign(c.candidateId, e.target.value));
+  });
+}
+
+function renderCandidate(c) {
+  const band = confBand(c.confidenceScore);
+  const decided = c.status !== "pending";
+  const cardClass = c.status === "approved" ? "approved" : c.status === "rejected" ? "rejected" : "";
+
+  const options = ['<option value="">— No match assigned —</option>']
+    .concat(SCHEDULE.map((a) =>
+      `<option value="${a.activityId}" ${c.matchedActivity?.activityId === a.activityId ? "selected" : ""}>
+        ${escapeHtml(a.activityName)} (${a.activityId})
+      </option>`
+    )).join("");
+
+  const selectClass = "match-select" + (c.matchedActivity ? "" : " unmatched");
+
+  const actions = decided
+    ? `<span class="status-label ${c.status}">${c.status === "approved" ? "✓ Approved" : "✕ Rejected"}</span>`
+    : `<div class="actions">
+        <button class="btn btn-reject">✕ Reject</button>
+        <button class="btn btn-approve" ${c.matchedActivity ? "" : "disabled"}>✓ Approve</button>
+      </div>`;
+
+  return `<div class="cand ${cardClass}" data-cid="${c.candidateId}">
+    <div class="cand-top">
+      <div class="cand-text-wrapper">
+        <div class="cand-text">"${escapeHtml(c.extractedText)}"</div>
+        <div class="cand-tags">
+          <span class="disc-tag">${escapeHtml(c.discipline)}</span>
+          <span class="time-tag">${escapeHtml(c.start)} – ${escapeHtml(c.end)}</span>
+        </div>
+      </div>
+      <span class="conf ${band}">${band === "high" ? "High Match" : band === "med" ? "Medium Match" : "Low Match"} · ${Math.round(c.confidenceScore * 100)}%</span>
+    </div>
+    <div class="cand-bottom">
+      <div class="match-wrapper">
+        <span class="match-label">Linked To:</span>
+        <div class="match-select-container">
+          <select class="${selectClass}" ${decided ? "disabled" : ""}>${options}</select>
+          ${!decided ? `<svg class="select-arrow" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>` : ''}
+        </div>
+      </div>
+      ${actions}
+    </div>
+  </div>`;
+}
+
+function renderHistory() {
+  bulkBtn.style.display = "none";
+  if (history.length === 0) {
+    contentEl.innerHTML = '<p class="empty-hint">No decisions recorded yet. Approve or reject matches in the Review Queue.</p>';
+    return;
+  }
+  contentEl.innerHTML = `<div class="hist-list">${history.map((h) => `
+    <div class="hist-row">
+      <div>
+        <div class="name">${escapeHtml(h.matchedActivity?.activityName || "Unmatched item")}</div>
+        <div class="sub">${escapeHtml(h.sourceFile)} · ${h.decidedAt.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</div>
+      </div>
+      <span class="status-label ${h.status}">${h.status === "approved" ? "✓ Approved" : "✕ Rejected"}</span>
+    </div>
+  `).join("")}</div>`;
+}
+
+render();
+</script>
+</body>
+</html>
