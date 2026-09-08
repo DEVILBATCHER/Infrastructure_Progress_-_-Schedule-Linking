@@ -5,29 +5,57 @@ import numpy as np
 import re 
 import csv
 import io
+from pypdf import PdfReader
+from pptx import Presentation
+import openpyxl
 from sentence_transformers import SentenceTransformer
-
-from datetime import datetime, date
+from contextlib import asynccontextmanager
+from datetime import datetime, date, timedelta, timezone
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, Response, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from typing import List 
+from typing import List, Tuple
 
 import models
 import schemas
-from database import engine, get_db
+from database import engine, get_db, SessionLocal
 
 # This tells SQLAlchemy to create all tables defined in models.py if they don't exist yet
 models.Base.metadata.create_all(bind=engine)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    db = SessionLocal()
+    try:
+        deleted = (
+            db.query(models.ScheduleActivity)
+            .filter(
+                (models.ScheduleActivity.wbs_code == "string")
+                | (models.ScheduleActivity.activity_name == "string")
+            )
+            .delete()
+        )
+        if deleted > 0:
+            db.commit()
+            print(f"[Startup Clean] Successfully removed {deleted} dummy row(s).")
+    except Exception as e:
+        db.rollback()
+        print(f"[Startup Clean] Warning: {e}")
+    finally:
+        db.close()
+
+    yield
+
 
 app = FastAPI(title="Infrastructure Progress Tracker")
 app.add_middleware(
     CORSMiddleware,
+
     allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 # Load local sentence embedding model
 model = SentenceTransformer('all-MiniLM-L6-v2')
 
@@ -311,53 +339,59 @@ def review_match(
     db: Session = Depends(get_db)
 ):
     try:
-        # Resolve UUID or raw string
-        clean_id = str(match_id).strip()
-        match = None
+        # 1. Ensure target ID is a strict UUID object
+        clean_str = str(match_id).strip()
         try:
-            target_uuid = uuid.UUID(clean_id)
-            match = db.query(models.ActivityMatch).filter(models.ActivityMatch.id == target_uuid).first()
+            target_uuid = uuid.UUID(clean_str)
         except Exception:
-            pass
+            raise HTTPException(status_code=400, detail="Invalid match UUID format")
 
-        if not match:
-            match = db.query(models.ActivityMatch).filter(models.ActivityMatch.id == clean_id).first()
+        # 2. Query strictly by UUID object
+        match = db.query(models.ActivityMatch).filter(models.ActivityMatch.id == target_uuid).first()
 
         if not match:
             raise HTTPException(status_code=404, detail="Activity match not found")
 
-        action = str(payload.get("action", "")).strip().upper()
-        if not action:
+        # 3. Read payload fields safely
+        raw_action = payload.get("action") if isinstance(payload, dict) else getattr(payload, "action", None)
+        reviewer_name = (payload.get("reviewer_name") if isinstance(payload, dict) else getattr(payload, "reviewer_name", None)) or "Site Planner"
+        remarks = payload.get("remarks") if isinstance(payload, dict) else getattr(payload, "remarks", None)
+        raw_new_sched_id = payload.get("corrected_schedule_activity_id") if isinstance(payload, dict) else getattr(payload, "corrected_schedule_activity_id", None)
+
+        if not raw_action:
             raise HTTPException(status_code=400, detail="'action' field is required")
 
-        # Save audit fields
-        match.reviewed_at = datetime.utcnow()
-        match.reviewed_by = payload.get("reviewer_name", "Site Planner")
-        match.review_remarks = payload.get("remarks")
+        action = str(raw_action).strip().upper()
 
-        if action == "APPROVE":
+        # 4. Update status
+        if action in ["APPROVE", "MANUALLY_APPROVED"]:
             match.status = "MANUALLY_APPROVED"
-        elif action == "REJECT":
+        elif action in ["REJECT", "REJECTED"]:
             match.status = "REJECTED"
         elif action == "REASSIGN":
-            new_sched_id = payload.get("corrected_schedule_activity_id")
-            if not new_sched_id:
-                raise HTTPException(status_code=400, detail="corrected_schedule_activity_id required for reassignment")
-            match.schedule_activity_id = uuid.UUID(str(new_sched_id).strip())
             match.status = "MANUALLY_APPROVED"
-            match.confidence_score = 1.0
+            if raw_new_sched_id:
+                try:
+                    match.schedule_activity_id = uuid.UUID(str(raw_new_sched_id).strip())
+                except Exception:
+                    match.schedule_activity_id = str(raw_new_sched_id).strip()
         else:
-            raise HTTPException(status_code=400, detail="Action must be APPROVE, REJECT, or REASSIGN")
+            match.status = action
+
+        # 5. Update audit details
+        match.reviewed_by = str(reviewer_name)
+        match.reviewed_at = datetime.now(timezone.utc)
+        if hasattr(match, "review_remarks"):
+            match.review_remarks = str(remarks) if remarks else None
 
         db.commit()
         db.refresh(match)
 
         return {
-            "message": f"Match status updated to {match.status}",
+            "status": "success",
+            "message": "Review recorded successfully",
             "match_id": str(match.id),
-            "reviewed_by": match.reviewed_by,
-            "reviewed_at": str(match.reviewed_at),
-            "remarks": match.review_remarks
+            "current_status": match.status
         }
 
     except HTTPException:
@@ -365,6 +399,7 @@ def review_match(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Review update failed: {str(e)}")
+
 
 
 # 8. Analytics and Progress of the report :
@@ -434,69 +469,153 @@ def get_progress_summary(db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate progress summary: {str(e)}")
 
-# 9--- Seed Baseline Schedule Tasks ---
-@app.post("/api/v1/schedule/seed-baseline")
-def seed_baseline_schedule(db: Session = Depends(get_db)):
-    baseline_activities = [
-        {
-            "wbs_code": "1.1",
-            "activity_name": "Excavation and foundation groundwork",
-            "planned_start_date": date(2026, 9, 1),
-            "planned_end_date": date(2026, 9, 15)
-        },
-        {
-            "wbs_code": "1.2",
-            "activity_name": "Reinforced concrete pillar and slab casting",
-            "planned_start_date": date(2026, 9, 16),
-            "planned_end_date": date(2026, 10, 5)
-        },
-        {
-            "wbs_code": "2.1",
-            "activity_name": "Brickwork and masonry construction",
-            "planned_start_date": date(2026, 10, 6),
-            "planned_end_date": date(2026, 10, 25)
-        },
-        {
-            "wbs_code": "2.2",
-            "activity_name": "Electrical wiring and conduit rough-in",
-            "planned_start_date": date(2026, 10, 26),
-            "planned_end_date": date(2026, 11, 10)
-        },
-        {
-            "wbs_code": "3.1",
-            "activity_name": "Interior and exterior surface painting",
-            "planned_start_date": date(2026, 11, 11),
-            "planned_end_date": date(2026, 11, 30)
-        }
-    ]
+#--9 basepipeline
+# 2. PASTE THE TWO HELPER FUNCTIONS HERE (Around Line 470)
+# (Notice: DO NOT put @app.post above either function)
+# -------------------------------------------------------------
+def extract_tasks_from_text(content: str) -> List[Tuple[str, str]]:
+    tasks: List[Tuple[str, str]] = []
+    lines = content.splitlines()
 
-    created = []
-    for item in baseline_activities:
-        existing = db.query(models.ScheduleActivity).filter(
-            models.ScheduleActivity.activity_name == item["activity_name"]
-        ).first()
+    for line in lines:
+        cleaned_line = line.strip()
+        if not cleaned_line or cleaned_line.lower().startswith("wbs"):
+            continue
 
-        if not existing:
-            new_activity = models.ScheduleActivity(
-                id=uuid.uuid4(),
-                wbs_code=item["wbs_code"],
-                activity_name=item["activity_name"],
-                planned_start_date=item["planned_start_date"],
-                planned_end_date=item["planned_end_date"]
+        match = re.match(r"^(\d+(?:\.\d+)*)\s*[:-]?\s*(.+)$", cleaned_line)
+        if match:
+            wbs, activity = match.group(1).strip(), match.group(2).strip()
+            if activity.lower() != "string":
+                tasks.append((wbs, activity))
+        elif len(cleaned_line.split()) >= 2:
+            auto_wbs = f"AUTO.{len(tasks) + 1}"
+            tasks.append((auto_wbs, cleaned_line))
+
+    return tasks
+
+
+def parse_baseline_file(file_bytes: bytes, filename: str) -> List[Tuple[str, str]]:
+    ext = filename.lower().split(".")[-1]
+    tasks: List[Tuple[str, str]] = []
+
+    if ext == "csv":
+        try:
+            decoded_text = file_bytes.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            decoded_text = file_bytes.decode("latin-1")
+
+        reader = csv.DictReader(io.StringIO(decoded_text))
+        for row in reader:
+            wbs = (
+                row.get("WBS Code")
+                or row.get("wbs_code")
+                or row.get("WBS")
+                or row.get("wbs")
+                or ""
             )
-            db.add(new_activity)
-            created.append(item["activity_name"])
+            activity = (
+                row.get("Activity Name")
+                or row.get("activity_name")
+                or row.get("Activity")
+                or row.get("activity")
+                or ""
+            )
+            if wbs.strip() and activity.strip() and activity.strip().lower() != "string":
+                tasks.append((wbs.strip(), activity.strip()))
 
-    db.commit()
-    return {
-        "message": f"Successfully seeded {len(created)} baseline tasks.",
-        "added_activities": created
-    }
+    elif ext in ["xlsx", "xls"]:
+        workbook = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+        sheet = workbook.active
+        for row in sheet.iter_rows(min_row=2, values_only=True):
+            if row and len(row) >= 2 and row[0] is not None and row[1] is not None:
+                wbs = str(row[0]).strip()
+                activity = str(row[1]).strip()
+                if activity.lower() != "string":
+                    tasks.append((wbs, activity))
+
+    elif ext == "pdf":
+        reader = PdfReader(io.BytesIO(file_bytes))
+        extracted_pages = [page.extract_text() or "" for page in reader.pages]
+        tasks = extract_tasks_from_text("\n".join(extracted_pages))
+
+    elif ext == "pptx":
+        presentation = Presentation(io.BytesIO(file_bytes))
+        slide_lines = []
+        for slide in presentation.slides:
+            for shape in slide.shapes:
+                if shape.has_text_frame:
+                    slide_lines.append(shape.text)
+        tasks = extract_tasks_from_text("\n".join(slide_lines))
+
+    elif ext == "txt":
+        decoded_text = file_bytes.decode("utf-8", errors="ignore")
+        tasks = extract_tasks_from_text(decoded_text)
+
+    else:
+        raise ValueError(
+            f"Unsupported format: .{ext}. Supported formats: csv, xlsx, xls, pdf, pptx, txt"
+        )
+
+    return tasks
+
+
+# -------------------------------------------------------------
+# 3. FASTAPI ROUTE (DIRECTLY BELOW THE HELPERS)
+# -------------------------------------------------------------
+@app.post("/api/v1/schedule/baseline/upload")
+async def upload_custom_baseline(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
+    try:
+        contents = await file.read()
+        parsed_tasks = parse_baseline_file(contents, file.filename)
+
+        if not parsed_tasks:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Could not extract any baseline activities from '{file.filename}'."
+            )
+
+        db.query(models.ScheduleActivity).delete()
+        db.commit()
+
+        now = datetime.now(timezone.utc)
+        added = []
+        for i, (wbs, name) in enumerate(parsed_tasks):
+            activity = models.ScheduleActivity(
+                wbs_code=wbs,
+                activity_name=name,
+                planned_start_date=now + timedelta(days=i * 2),
+                planned_end_date=now + timedelta(days=(i * 2) + 7)
+            )
+            db.add(activity)
+            added.append({"wbs_code": wbs, "activity_name": name})
+
+        db.commit()
+
+        return {
+            "status": "success",
+            "filename": file.filename,
+            "message": f"Successfully loaded {len(added)} baseline tasks.",
+            "sample_activities": added[:5]
+        }
+
+    except ValueError as val_err:
+        raise HTTPException(status_code=400, detail=str(val_err))
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to process file: {str(e)}")
+
+
+
 #---10 export file
 @app.get("/api/v1/analytics/progress/export")
 def export_progress_summary_csv(db: Session = Depends(get_db)):
     try:
-        activities = db.query(models.ScheduleActivity).all()
+        activities = (db.query(models.ScheduleActivity).filter(models.ScheduleActivity.wbs_code !="string",models.ScheduleActivity.activity_name != "string").all())
         approved_statuses = ["AUTO_APPROVED", "MANUALLY_APPROVED"]
         
         approved_matches = (
