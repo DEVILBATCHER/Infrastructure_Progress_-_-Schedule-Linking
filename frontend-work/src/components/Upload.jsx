@@ -4,7 +4,7 @@ import { FolderIcon, DimensionArrows } from './Icons';
 import { uploadReport } from '../api';
 import MatchResults from './MatchResults';
 
-const Upload = () => {
+const Upload = ({ onAnalysisComplete }) => {
   const [file, setFile] = useState(null);
   const [status, setStatus] = useState('idle'); // 'idle' | 'processing' | 'result'
   const [result, setResult] = useState(null);
@@ -19,6 +19,7 @@ const Upload = () => {
     try {
       const res = await uploadReport(file);
       setResult(res);
+      onAnalysisComplete(res);
       setStatus('result');
     } catch (err) {
       alert("Upload failed: " + err.message);

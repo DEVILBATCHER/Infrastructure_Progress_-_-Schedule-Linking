@@ -15,7 +15,7 @@ const StatCard = ({ label, value, subtext, colorClass = "text-site-ink" }) => (
   </div>
 );
 
-const Dashboard = () => {
+const Dashboard = ({ adjustments }) => {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -28,6 +28,14 @@ const Dashboard = () => {
       setLoading(false);
     });
   }, []);
+
+  const displayedStats = stats && {
+    ...stats,
+    reportsProcessed: stats.reportsProcessed + adjustments.reportsProcessed,
+    autoMatched: stats.autoMatched + adjustments.autoMatched,
+    needsReview: stats.needsReview + adjustments.needsReview,
+    unmatched: stats.unmatched + adjustments.unmatched,
+  };
 
   if (loading) return <div className="flex items-center justify-center h-64 text-site-grey font-mono">Loading Blueprint...</div>;
   if (!stats) return <div className="text-center p-12 text-red-500">Failed to load dashboard data.</div>;
@@ -79,10 +87,10 @@ const Dashboard = () => {
 
       {/* Grid Stats */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        <StatCard label="Reports Processed" value={stats.reportsProcessed} />
-        <StatCard label="Auto Matched" value={stats.autoMatched} colorClass="text-site-accent-active" />
-        <StatCard label="Needs Review" value={stats.needsReview} colorClass="text-site-accent-delayed" />
-        <StatCard label="Unmatched" value={stats.unmatched} />
+        <StatCard label="Reports Processed" value={displayedStats.reportsProcessed} />
+        <StatCard label="Auto Matched" value={displayedStats.autoMatched} colorClass="text-site-accent-active" />
+        <StatCard label="Needs Review" value={displayedStats.needsReview} colorClass="text-site-accent-delayed" />
+        <StatCard label="Unmatched" value={displayedStats.unmatched} />
       </div>
 
       {/* Bottom Section */}
