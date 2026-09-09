@@ -15,7 +15,7 @@ const StatCard = ({ label, value, subtext, colorClass = "text-site-ink" }) => (
   </div>
 );
 
-const Dashboard = ({ adjustments }) => {
+const Dashboard = ({ adjustments, newActivity = [] }) => {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -36,6 +36,12 @@ const Dashboard = ({ adjustments }) => {
     needsReview: stats.needsReview + adjustments.needsReview,
     unmatched: stats.unmatched + adjustments.unmatched,
   };
+
+  // Newly uploaded entries appear first, then the original mock history,
+  // capped to the last 5 so the table doesn't grow unbounded during a demo.
+  const combinedActivity = stats
+    ? [...newActivity, ...stats.recentActivity].slice(0, 5)
+    : [];
 
   if (loading) return <div className="flex items-center justify-center h-64 text-site-grey font-mono">Loading Blueprint...</div>;
   if (!stats) return <div className="text-center p-12 text-red-500">Failed to load dashboard data.</div>;
@@ -100,7 +106,7 @@ const Dashboard = ({ adjustments }) => {
             <h3 className="text-xl font-headline">Recent Activity Log</h3>
             <span className="text-xs font-mono text-site-grey">Last 5 entries</span>
           </div>
-          <ActivityTable activity={stats.recentActivity} />
+          <ActivityTable activity={combinedActivity} />
         </div>
 
         <div className="space-y-6">

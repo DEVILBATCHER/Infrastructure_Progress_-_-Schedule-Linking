@@ -19,9 +19,12 @@ const MOCK_DATA = {
     unmatched: 62,
     matchingAccuracy: 88.4,
     recentActivity: [
-      { id: 'ACT-001', report: 'Q3_Infrastructure_Audit.pdf', status: 'matched', date: '2026-09-07', confidence: 'High' },
-      { id: 'ACT-002', report: 'Facility_Scan_B2.csv', status: 'needs-review', date: '2026-09-07', confidence: 'Medium' },
-      { id: 'ACT-003', report: 'Site_Print_Mapping_V1.json', status: 'unmatched', date: '2026-09-06', confidence: 'Low' },
+      // Renamed from the demo-file names on purpose - these must NOT match
+      // DEMO_FILE_MAP keys below, so a live upload during a presentation
+      // clearly reads as a new row, not a pre-existing duplicate.
+      { id: 'ACT-001', report: 'Northgate_Substation_Report.pdf', status: 'matched', date: '2026-09-07', confidence: 'High' },
+      { id: 'ACT-002', report: 'Turbine_Bay_Inspection.csv', status: 'needs-review', date: '2026-09-07', confidence: 'Medium' },
+      { id: 'ACT-003', report: 'Corridor_Survey_Draft.json', status: 'unmatched', date: '2026-09-06', confidence: 'Low' },
       { id: 'ACT-004', report: 'External_Audit_Final.pdf', status: 'matched', date: '2026-09-06', confidence: 'High' },
       { id: 'ACT-005', report: 'Inventory_Log_Sep.xlsx', status: 'matched', date: '2026-09-05', confidence: 'High' },
     ],
@@ -90,6 +93,18 @@ const MOCK_DATA = {
   ]
 };
 
+// Filenames listed here always return the same fixed result, with the
+// realistic delay but WITHOUT the random 10% network-error roll -
+// use these during a live presentation to guarantee specific outcomes.
+// Rename real files on disk to match these names exactly (case-sensitive)
+// before demoing. Any other filename still gets full random behavior.
+const DEMO_FILE_MAP = {
+  "Q3_Infrastructure_Audit.pdf": 'res-1',   // guaranteed High confidence
+  "Facility_Scan_B2.csv": 'res-2',           // guaranteed Medium-Low, shows alternatives
+  "Site_Print_Mapping_V1.json": 'res-3',     // guaranteed no_match
+  "Corrupt_File.pdf": 'res-4',               // guaranteed error state (returned gracefully, not thrown)
+};
+
 export const fetchDashboardStats = async () => {
   if (USE_MOCK) {
     await simulateNetwork();
@@ -101,8 +116,18 @@ export const fetchDashboardStats = async () => {
 
 export const uploadReport = async (file) => {
   if (USE_MOCK) {
+    const demoResultId = DEMO_FILE_MAP[file.name];
+
+    if (demoResultId) {
+      // Demo files: realistic delay only, no random error - guaranteed outcome
+      const delay = Math.floor(Math.random() * (900 - 500 + 1)) + 500;
+      await sleep(delay);
+      return MOCK_DATA.matchResults.find(r => r.id === demoResultId);
+    }
+
+    // Any other filename: full random behavior, including the ~10% error
+    // chance, so uploading something else still shows realistic variation.
     await simulateNetwork();
-    // Simulate choosing a random result from MOCK_DATA.matchResults
     const randomIndex = Math.floor(Math.random() * MOCK_DATA.matchResults.length);
     return MOCK_DATA.matchResults[randomIndex];
   }
