@@ -7,7 +7,7 @@ import csv
 import io
 from sentence_transformers import SentenceTransformer
 
-from datetime import datetime, date
+from datetime import datetime, date, timedelta 
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, Response, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -77,7 +77,137 @@ app.add_middleware(
 def home():
     return {"message": "backend is running successfully"}
 
-# 1. Add a single schedule activity
+# 1--- Seed Baseline Schedule Tasks ---
+def extract_tasks_from_text(content: str):
+    tasks = []
+    lines = content.splitlines()
+    for line in lines:
+        cleaned_line = line.strip()
+        if not cleaned_line or cleaned_line.lower().startswith("wbs"):
+            continue
+        match = re.match(r"^(\d+(?:\.\d+)*)\s*[:-]?\s*(.+)$", cleaned_line)
+        if match:
+            wbs, activity = match.group(1).strip(), match.group(2).strip()
+            if activity.lower() != "string":
+                tasks.append((wbs, activity))
+        elif len(cleaned_line.split()) >= 2:
+            auto_wbs = f"AUTO.{len(tasks) + 1}"
+            tasks.append((auto_wbs, cleaned_line))
+    return tasks
+
+
+def parse_baseline_file(file_bytes: bytes, filename: str):
+    ext = filename.lower().split(".")[-1]
+    tasks = []
+
+    if ext == "csv":
+        try:
+            decoded_text = file_bytes.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            decoded_text = file_bytes.decode("latin-1")
+        reader = csv.DictReader(io.StringIO(decoded_text))
+        for row in reader:
+            wbs = row.get("WBS Code") or row.get("wbs_code") or row.get("WBS") or ""
+            activity = row.get("Activity Name") or row.get("activity_name") or row.get("Activity") or ""
+            if wbs.strip() and activity.strip() and activity.strip().lower() != "string":
+                tasks.append((wbs.strip(), activity.strip()))
+
+    elif ext in ["xlsx", "xls"]:
+        workbook = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+        sheet = workbook.active
+        for row in sheet.iter_rows(min_row=2, values_only=True):
+            if row and len(row) >= 2 and row[0] is not None and row[1] is not None:
+                wbs, activity = str(row[0]).strip(), str(row[1]).strip()
+                if activity.lower() != "string":
+                    tasks.append((wbs, activity))
+
+    elif ext == "pdf":
+        reader = PdfReader(io.BytesIO(file_bytes))
+        extracted_pages = [page.extract_text() or "" for page in reader.pages]
+        tasks = extract_tasks_from_text("\n".join(extracted_pages))
+
+    elif ext == "pptx":
+        presentation = Presentation(io.BytesIO(file_bytes))
+        slide_lines = []
+        for slide in presentation.slides:
+            for shape in slide.shapes:
+                if shape.has_text_frame:
+                    slide_lines.append(shape.text)
+        tasks = extract_tasks_from_text("\n".join(slide_lines))
+
+    elif ext == "txt":
+        decoded_text = file_bytes.decode("utf-8", errors="ignore")
+        tasks = extract_tasks_from_text(decoded_text)
+
+    else:
+        raise ValueError(f"Unsupported format: .{ext}. Supported formats: csv, xlsx, xls, pdf, pptx, txt")
+
+    return tasks
+
+
+@app.post("/api/v1/schedule/baseline/upload", tags=["1. Schedule & Baseline Setup"])
+async def upload_custom_baseline(
+    file: UploadFile = File(...),
+    project_start_date: date = Form(default=date.today(), description="Overall project start date (YYYY-MM-DD)"),
+    project_end_date: date = Form(default=date.today() + timedelta(days=90), description="Overall project end date (YYYY-MM-DD)"),
+    db: Session = Depends(get_db)
+):
+    try:
+        contents = await file.read()
+        parsed_tasks = parse_baseline_file(contents, file.filename)
+
+        if not parsed_tasks:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Could not extract baseline activities from '{file.filename}'."
+            )
+
+        # Clear existing activities
+        db.query(models.ScheduleActivity).delete()
+        db.commit()
+
+        # Distribute the duration evenly across tasks between project start and end
+        total_tasks = len(parsed_tasks)
+        total_days = (project_end_date - project_start_date).days
+        step = max(1, total_days // total_tasks)
+
+        added = []
+        for i, (wbs, name) in enumerate(parsed_tasks):
+            act_start = project_start_date + timedelta(days=i * step)
+            act_end = min(project_end_date, act_start + timedelta(days=step))
+
+            activity = models.ScheduleActivity(
+                wbs_code=wbs,
+                activity_name=name,
+                planned_start_date=act_start,
+                planned_end_date=act_end
+            )
+            db.add(activity)
+            added.append({
+                "wbs_code": wbs, 
+                "activity_name": name,
+                "planned_start": str(act_start),
+                "planned_end": str(act_end)
+            })
+
+        db.commit()
+
+        return {
+            "status": "success",
+            "project_timeline": {
+                "start_date": str(project_start_date),
+                "end_date": str(project_end_date)
+            },
+            "loaded_activities_count": len(added),
+            "sample_activities": added[:5]
+        }
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# 2. Add a single schedule activity
 @app.post("/api/v1/schedule/activities", response_model=schemas.ScheduleActivityResponse)
 def create_activity(activity: schemas.ScheduleActivityCreate, db: Session = Depends(get_db)):
     db_activity = models.ScheduleActivity(
@@ -91,7 +221,7 @@ def create_activity(activity: schemas.ScheduleActivityCreate, db: Session = Depe
     db.refresh(db_activity)
     return db_activity
 
-# 2. Get all schedule activities
+# 3. Get all schedule activities
 @app.get("/api/v1/schedule/activities", response_model=List[schemas.ScheduleActivityResponse])
 def get_activities(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     activities = db.query(models.ScheduleActivity).offset(skip).limit(limit).all()
@@ -119,7 +249,7 @@ def extract_notes_from_pdf(file_path: str) -> list[str]:
     return notes
 
 
-# 3. Upload a site report (PDF, Excel, or Image)
+# 5. Upload a site report (PDF, Excel, or Image)
 @app.post("/api/v1/reports/upload", response_model=schemas.SiteReportResponse)
 def upload_report(
     report_date: date = Form(...),
@@ -150,11 +280,11 @@ def upload_report(
 
     return new_report
 
-# 4. Get list of all uploaded reports and their statuses
+# 6. Get list of all uploaded reports and their statuses
 @app.get("/api/v1/reports", response_model=List[schemas.SiteReportResponse])
 def get_reports(db: Session = Depends(get_db)):
     return db.query(models.SiteReport).order_by(models.SiteReport.created_at.desc()).all()
-# 5. Semantic Matcher: Match unstructured daily site logs to schedule items
+# 7. Semantic Matcher: Match unstructured daily site logs to schedule items
 @app.post("/api/v1/reports/{report_id}/process")
 def process_and_match_report(
     report_id: str,
@@ -261,7 +391,7 @@ def process_and_match_report(
         raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
 
 
-# 6. Planner Review Queue: Retrieve uncertain matches (< 0.80)
+# 7. Planner Review Queue: Retrieve uncertain matches (< 0.80)
 @app.get("/api/v1/matches/review-queue")
 def get_review_queue(db: Session = Depends(get_db)):
     try:
@@ -303,7 +433,7 @@ def get_review_queue(db: Session = Depends(get_db)):
 
 
 
-# 7. Planner Decision: Approve or Reject a match
+# 8. Planner Decision: Approve or Reject a match
 @app.patch("/api/v1/matches/{match_id}/review")
 def review_match(
     match_id: str,
@@ -367,7 +497,7 @@ def review_match(
         raise HTTPException(status_code=500, detail=f"Review update failed: {str(e)}")
 
 
-# 8. Analytics and Progress of the report :
+# 9. Analytics and Progress of the report :
 @app.get("/api/v1/analytics/progress")
 def get_progress_summary(db: Session = Depends(get_db)):
     try:
@@ -434,64 +564,7 @@ def get_progress_summary(db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate progress summary: {str(e)}")
 
-# 9--- Seed Baseline Schedule Tasks ---
-@app.post("/api/v1/schedule/seed-baseline")
-def seed_baseline_schedule(db: Session = Depends(get_db)):
-    baseline_activities = [
-        {
-            "wbs_code": "1.1",
-            "activity_name": "Excavation and foundation groundwork",
-            "planned_start_date": date(2026, 9, 1),
-            "planned_end_date": date(2026, 9, 15)
-        },
-        {
-            "wbs_code": "1.2",
-            "activity_name": "Reinforced concrete pillar and slab casting",
-            "planned_start_date": date(2026, 9, 16),
-            "planned_end_date": date(2026, 10, 5)
-        },
-        {
-            "wbs_code": "2.1",
-            "activity_name": "Brickwork and masonry construction",
-            "planned_start_date": date(2026, 10, 6),
-            "planned_end_date": date(2026, 10, 25)
-        },
-        {
-            "wbs_code": "2.2",
-            "activity_name": "Electrical wiring and conduit rough-in",
-            "planned_start_date": date(2026, 10, 26),
-            "planned_end_date": date(2026, 11, 10)
-        },
-        {
-            "wbs_code": "3.1",
-            "activity_name": "Interior and exterior surface painting",
-            "planned_start_date": date(2026, 11, 11),
-            "planned_end_date": date(2026, 11, 30)
-        }
-    ]
 
-    created = []
-    for item in baseline_activities:
-        existing = db.query(models.ScheduleActivity).filter(
-            models.ScheduleActivity.activity_name == item["activity_name"]
-        ).first()
-
-        if not existing:
-            new_activity = models.ScheduleActivity(
-                id=uuid.uuid4(),
-                wbs_code=item["wbs_code"],
-                activity_name=item["activity_name"],
-                planned_start_date=item["planned_start_date"],
-                planned_end_date=item["planned_end_date"]
-            )
-            db.add(new_activity)
-            created.append(item["activity_name"])
-
-    db.commit()
-    return {
-        "message": f"Successfully seeded {len(created)} baseline tasks.",
-        "added_activities": created
-    }
 #---10 export file
 @app.get("/api/v1/analytics/progress/export")
 def export_progress_summary_csv(db: Session = Depends(get_db)):
